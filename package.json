@@ -5,7 +5,14 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "dev:local": "npm run db:env && node --env-file=.env.local --watch src/server.js",
+    "start": "node src/server.js",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:env": "supabase status -o env > .env.local",
+    "db:push": "supabase db push",
+    "test:posts": "node scripts/smokePosts.js"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +22,10 @@
     "@supabase/supabase-js": "^2.108.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "supabase": "^2.109.0"
   }
 }
