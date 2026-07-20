@@ -1,3 +1,4 @@
+import { MulterError } from 'multer'
 import { HttpError } from '../utils/httpError.js'
 
 export function notFoundHandler(req, res) {
@@ -17,6 +18,12 @@ export function errorHandler(error, _req, res, _next) {
         message: error.message,
         ...(error.details ? { details: error.details } : {}),
       },
+    })
+  }
+
+  if (error instanceof MulterError) {
+    return res.status(400).json({
+      error: { code: error.code, message: error.message },
     })
   }
 
