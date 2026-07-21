@@ -1,0 +1,26 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+node_modules
+*.local
+
+# Environment and deployment secrets
+.env
+.env.*
+
+# Claude Code / AI tooling workspace (solo project — not shared with a team)
+.claude/
+CLAUDE.md
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
