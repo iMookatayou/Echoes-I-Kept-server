@@ -1,22 +1,34 @@
+import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import express from 'express'
+import authRouter from './routes/authRoutes.js'
 import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import postsRouter from './routes/postsRoutes.js'
 import uploadRouter from './routes/uploadRoutes.js'
+import usersRouter from './routes/usersRoutes.js'
 import { hasSupabaseConfig, supabase } from './supabaseClient.js'
 
 const app = express()
 const port = process.env.PORT || 4000
 
-app.use(cors())
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173', credentials: true }))
 app.use(express.json({ limit: '1mb' }))
+app.use(cookieParser())
 
 app.get('/', (_req, res) => {
   res.json({
     ok: true,
     service: 'server',
-    endpoints: ['/health', '/health/db', '/api/posts', '/api/uploads', '/api/categories'],
+    endpoints: [
+      '/health',
+      '/health/db',
+      '/api/posts',
+      '/api/uploads',
+      '/api/categories',
+      '/api/auth',
+      '/api/users',
+    ],
   })
 })
 
@@ -49,6 +61,8 @@ app.get('/health/db', async (_req, res, next) => {
 app.use('/api/posts', postsRouter)
 app.use('/api/uploads', uploadRouter)
 app.use('/api/categories', categoriesRouter)
+app.use('/api/auth', authRouter)
+app.use('/api/users', usersRouter)
 app.use(notFoundHandler)
 app.use(errorHandler)
 
