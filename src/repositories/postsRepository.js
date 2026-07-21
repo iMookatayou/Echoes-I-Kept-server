@@ -1,5 +1,7 @@
 import { supabase } from '../supabaseClient.js'
 import { HttpError } from '../utils/httpError.js'
+import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
+import { toSlug } from '../utils/slug.js'
 
 const postSelection = `
   id,
@@ -21,39 +23,6 @@ const postSelection = `
   updated_at,
   category:categories!inner(name, slug)
 `
-
-function requireDatabase() {
-  if (!supabase) {
-    throw new HttpError(
-      503,
-      'DATABASE_NOT_CONFIGURED',
-      'Supabase is not configured for the backend',
-    )
-  }
-}
-
-function throwDatabaseError(error) {
-  if (!error) return
-
-  if (error.code === '23505') {
-    throw new HttpError(409, 'CONFLICT', 'A record with this value already exists')
-  }
-
-  if (error.code === '23503') {
-    throw new HttpError(400, 'INVALID_REFERENCE', 'A related record is invalid')
-  }
-
-  throw new HttpError(500, 'DATABASE_ERROR', error.message)
-}
-
-function toSlug(value) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-}
 
 function sanitizeSearch(value) {
   return value.replace(/[,%()]/g, ' ').trim()
