@@ -1,5 +1,6 @@
 import cors from 'cors'
 import express from 'express'
+import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import postsRouter from './routes/postsRoutes.js'
 import uploadRouter from './routes/uploadRoutes.js'
@@ -15,7 +16,7 @@ app.get('/', (_req, res) => {
   res.json({
     ok: true,
     service: 'server',
-    endpoints: ['/health', '/health/db', '/api/posts', '/api/uploads'],
+    endpoints: ['/health', '/health/db', '/api/posts', '/api/uploads', '/api/categories'],
   })
 })
 
@@ -47,6 +48,7 @@ app.get('/health/db', async (_req, res, next) => {
 
 app.use('/api/posts', postsRouter)
 app.use('/api/uploads', uploadRouter)
+app.use('/api/categories', categoriesRouter)
 app.use(notFoundHandler)
 app.use(errorHandler)
 
