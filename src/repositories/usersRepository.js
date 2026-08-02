@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient.js'
 import { HttpError } from '../utils/httpError.js'
 import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 
 const userSelection =
   'id, email, username, first_name, last_name, role, profile_pic, is_active, created_at, updated_at'
@@ -15,7 +16,7 @@ function toUser(row) {
     firstName: row.first_name,
     lastName: row.last_name,
     role: row.role,
-    profilePic: row.profile_pic,
+    profilePic: row.profile_pic || defaultAvatarUrl(row.first_name, row.last_name),
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

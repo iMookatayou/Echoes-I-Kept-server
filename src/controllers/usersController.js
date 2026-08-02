@@ -1,5 +1,6 @@
 import * as usersRepository from '../repositories/usersRepository.js'
 import { hashPassword } from '../utils/passwordHash.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
 
 export async function listUsers(req, res, next) {
@@ -24,7 +25,7 @@ export async function createUser(req, res, next) {
       email,
       passwordHash,
       role,
-      profilePic,
+      profilePic: profilePic || defaultAvatarUrl(firstName, lastName),
     })
 
     return res.status(201).json({ data: user })
@@ -58,7 +59,7 @@ export async function updateUser(req, res, next) {
       username,
       email,
       role,
-      profilePic,
+      profilePic: profilePic || defaultAvatarUrl(firstName, lastName),
     })
 
     if (password) {

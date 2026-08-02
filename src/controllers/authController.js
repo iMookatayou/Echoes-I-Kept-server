@@ -3,6 +3,7 @@ import * as refreshTokensRepository from '../repositories/refreshTokensRepositor
 import { hashPassword, comparePassword } from '../utils/passwordHash.js'
 import { signAccessToken } from '../utils/jwt.js'
 import { generateRefreshToken, hashToken } from '../utils/refreshToken.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
 
 async function issueSession({ id, role, tokenVersion }) {
@@ -29,7 +30,7 @@ export async function signup(req, res, next) {
       email,
       passwordHash,
       role: 'user',
-      profilePic: null,
+      profilePic: defaultAvatarUrl(firstName, lastName),
     })
 
     const authState = await usersRepository.getAuthState(user.id)
@@ -128,7 +129,7 @@ export async function updateProfile(req, res, next) {
       lastName,
       username,
       email,
-      profilePic,
+      profilePic: profilePic || defaultAvatarUrl(firstName, lastName),
     })
     if (!user) {
       throw new HttpError(404, 'USER_NOT_FOUND', 'User was not found')
