@@ -1,15 +1,14 @@
 import * as postsRepository from '../repositories/postsRepository.js'
-import { isLocalSupabaseConfig } from '../supabaseClient.js'
 import { HttpError } from '../utils/httpError.js'
 
 export async function listPosts(req, res, next) {
   try {
     const query = req.validated.query
-    if (!isLocalSupabaseConfig() && query.status !== 'published') {
+    if (req.user?.role !== 'admin' && query.status !== 'published') {
       throw new HttpError(
         403,
         'DRAFT_ACCESS_DISABLED',
-        'Draft access requires local Supabase until backend authentication is available',
+        'Draft access requires an admin session',
       )
     }
 
@@ -32,7 +31,7 @@ export async function listPosts(req, res, next) {
 export async function getPost(req, res, next) {
   try {
     const post = await postsRepository.getPostById(req.validated.params.id)
-    if (!post || (!isLocalSupabaseConfig() && post.status !== 'published')) {
+    if (!post || (req.user?.role !== 'admin' && post.status !== 'published')) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
     }
 

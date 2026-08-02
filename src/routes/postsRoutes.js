@@ -6,6 +6,7 @@ import {
   listPosts,
   updatePost,
 } from '../controllers/postsController.js'
+import { optionalAuth } from '../middleware/optionalAuth.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
 import { requireAuth } from '../middleware/requireAuth.js'
 import { validateRequest } from '../middleware/validateRequest.js'
@@ -20,12 +21,14 @@ const postsRouter = Router()
 
 postsRouter.get(
   '/',
+  optionalAuth,
   validateRequest({ query: listPostsQuerySchema }),
   listPosts,
 )
 
 postsRouter.get(
   '/:id',
+  optionalAuth,
   validateRequest({ params: postIdParamsSchema }),
   getPost,
 )
