@@ -1,4 +1,5 @@
 import * as postsRepository from '../repositories/postsRepository.js'
+import * as likesRepository from '../repositories/likesRepository.js'
 import { HttpError } from '../utils/httpError.js'
 
 export async function listPosts(req, res, next) {
@@ -35,7 +36,11 @@ export async function getPost(req, res, next) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
     }
 
-    return res.json({ data: post })
+    const likedByMe = req.user
+      ? await likesRepository.exists({ postId: post.id, userId: req.user.id })
+      : false
+
+    return res.json({ data: { ...post, likedByMe } })
   } catch (error) {
     return next(error)
   }
@@ -43,7 +48,7 @@ export async function getPost(req, res, next) {
 
 export async function createPost(req, res, next) {
   try {
-    const post = await postsRepository.createPost(req.validated.body)
+    const post = await postsRepository.createPost(req.validated.body, req.user.id)
     return res.status(201).json({ data: post })
   } catch (error) {
     return next(error)

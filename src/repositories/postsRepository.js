@@ -15,9 +15,11 @@ const postSelection = `
   description,
   content,
   status,
+  author_id,
   author_name,
   author_avatar_url,
   author_bio,
+  likes_count,
   published_at,
   created_at,
   updated_at,
@@ -43,9 +45,11 @@ function toPost(row) {
     description: row.description,
     content: row.content,
     status: row.status,
+    authorId: row.author_id,
     author: row.author_name,
     authorAvatar: row.author_avatar_url,
     authorBio: row.author_bio || [],
+    likesCount: row.likes_count,
     date: (row.published_at || row.created_at).slice(0, 10),
     publishedAt: row.published_at,
     createdAt: row.created_at,
@@ -139,12 +143,12 @@ export async function getPostById(id) {
   return data ? toPost(data) : null
 }
 
-export async function createPost(payload) {
+export async function createPost(payload, authorId) {
   requireDatabase()
   const category = await findCategory(payload.category)
   const { data, error } = await supabase
     .from('posts')
-    .insert(toPostRow(payload, category.id))
+    .insert({ ...toPostRow(payload, category.id), author_id: authorId })
     .select(postSelection)
     .single()
 

@@ -1,5 +1,11 @@
 import { Router } from 'express'
 import {
+  createComment,
+  deleteComment,
+  listComments,
+} from '../controllers/commentsController.js'
+import { likePost, unlikePost } from '../controllers/likesController.js'
+import {
   createPost,
   deletePost,
   getPost,
@@ -10,6 +16,11 @@ import { optionalAuth } from '../middleware/optionalAuth.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
 import { requireAuth } from '../middleware/requireAuth.js'
 import { validateRequest } from '../middleware/validateRequest.js'
+import {
+  commentParamsSchema,
+  createCommentSchema,
+  postIdParamsSchema as commentsPostIdParamsSchema,
+} from '../schemas/commentSchema.js'
 import {
   createPostSchema,
   listPostsQuerySchema,
@@ -55,6 +66,40 @@ postsRouter.delete(
   requireAdmin,
   validateRequest({ params: postIdParamsSchema }),
   deletePost,
+)
+
+postsRouter.get(
+  '/:postId/comments',
+  validateRequest({ params: commentsPostIdParamsSchema }),
+  listComments,
+)
+
+postsRouter.post(
+  '/:postId/comments',
+  requireAuth,
+  validateRequest({ params: commentsPostIdParamsSchema, body: createCommentSchema }),
+  createComment,
+)
+
+postsRouter.delete(
+  '/:postId/comments/:id',
+  requireAuth,
+  validateRequest({ params: commentParamsSchema }),
+  deleteComment,
+)
+
+postsRouter.post(
+  '/:postId/likes',
+  requireAuth,
+  validateRequest({ params: commentsPostIdParamsSchema }),
+  likePost,
+)
+
+postsRouter.delete(
+  '/:postId/likes',
+  requireAuth,
+  validateRequest({ params: commentsPostIdParamsSchema }),
+  unlikePost,
 )
 
 export default postsRouter
