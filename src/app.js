@@ -1,5 +1,6 @@
 import cors from 'cors'
 import express from 'express'
+import morgan from 'morgan'
 import authRouter from './routes/authRoutes.js'
 import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
@@ -12,6 +13,7 @@ const app = express()
 const port = process.env.PORT || 4000
 
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }))
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use(express.json({ limit: '1mb' }))
 
 app.get('/', (_req, res) => {
