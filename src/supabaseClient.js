@@ -18,12 +18,6 @@ export function hasSupabaseConfig() {
   return Boolean(isValidHttpUrl(supabaseUrl) && supabaseServiceRoleKey)
 }
 
-export function isLocalSupabaseConfig() {
-  if (!isValidHttpUrl(supabaseUrl)) return false
-  const { hostname } = new URL(supabaseUrl)
-  return hostname === '127.0.0.1' || hostname === 'localhost'
-}
-
 export const supabase = hasSupabaseConfig()
   ? createClient(supabaseUrl, supabaseServiceRoleKey)
   : null
