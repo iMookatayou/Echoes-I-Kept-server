@@ -5,34 +5,11 @@ import { signAccessToken } from '../utils/jwt.js'
 import { generateRefreshToken, hashToken } from '../utils/refreshToken.js'
 import { HttpError } from '../utils/httpError.js'
 
-const COOKIE_SECURE = process.env.NODE_ENV === 'production'
-
-function setAuthCookies(res, { accessToken, refreshToken, refreshTokenExpiresAt }) {
-  res.cookie('access_token', accessToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
-    path: '/',
-  })
-  res.cookie('refresh_token', refreshToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
-    path: '/api/auth/refresh',
-    expires: refreshTokenExpiresAt,
-  })
-}
-
-function clearAuthCookies(res) {
-  res.clearCookie('access_token', { path: '/' })
-  res.clearCookie('refresh_token', { path: '/api/auth/refresh' })
-}
-
-async function issueSession(res, { id, role, tokenVersion }) {
+async function issueSession({ id, role, tokenVersion }) {
   const accessToken = signAccessToken({ sub: id, role, tokenVersion })
   const { token: refreshToken, hash, expiresAt } = generateRefreshToken()
   await refreshTokensRepository.create({ userId: id, tokenHash: hash, expiresAt })
-  setAuthCookies(res, { accessToken, refreshToken, refreshTokenExpiresAt: expiresAt })
+  return { accessToken, refreshToken }
 }
 
 function invalidCredentials() {
@@ -56,9 +33,9 @@ export async function signup(req, res, next) {
     })
 
     const authState = await usersRepository.getAuthState(user.id)
-    await issueSession(res, authState)
+    const { accessToken, refreshToken } = await issueSession(authState)
 
-    return res.status(201).json({ data: user })
+    return res.status(201).json({ data: user, accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
@@ -75,10 +52,14 @@ export async function login(req, res, next) {
     const passwordMatches = await comparePassword(password, row.password_hash)
     if (!passwordMatches) throw invalidCredentials()
 
-    await issueSession(res, { id: row.id, role: row.role, tokenVersion: row.token_version })
+    const { accessToken, refreshToken } = await issueSession({
+      id: row.id,
+      role: row.role,
+      tokenVersion: row.token_version,
+    })
     const user = await usersRepository.getUserById(row.id)
 
-    return res.json({ data: user })
+    return res.json({ data: user, accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
@@ -86,10 +67,7 @@ export async function login(req, res, next) {
 
 export async function refresh(req, res, next) {
   try {
-    const token = req.cookies?.refresh_token
-    if (!token) {
-      throw new HttpError(401, 'UNAUTHORIZED', 'No refresh token')
-    }
+    const { refreshToken: token } = req.validated.body
 
     const record = await refreshTokensRepository.findActiveByHash(hashToken(token))
     if (!record) {
@@ -103,9 +81,9 @@ export async function refresh(req, res, next) {
       throw new HttpError(401, 'UNAUTHORIZED', 'Invalid or expired refresh token')
     }
 
-    await issueSession(res, authState)
+    const { accessToken, refreshToken } = await issueSession(authState)
 
-    return res.json({ ok: true })
+    return res.json({ accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
@@ -113,12 +91,9 @@ export async function refresh(req, res, next) {
 
 export async function logout(req, res, next) {
   try {
-    const token = req.cookies?.refresh_token
-    if (token) {
-      await refreshTokensRepository.revokeByHash(hashToken(token))
-    }
+    const { refreshToken: token } = req.validated.body
+    await refreshTokensRepository.revokeByHash(hashToken(token))
 
-    clearAuthCookies(res)
     return res.json({ ok: true })
   } catch (error) {
     return next(error)
@@ -178,9 +153,9 @@ export async function resetPassword(req, res, next) {
     await refreshTokensRepository.revokeAllForUser(req.user.id)
 
     const authState = await usersRepository.getAuthState(req.user.id)
-    await issueSession(res, authState)
+    const { accessToken, refreshToken } = await issueSession(authState)
 
-    return res.json({ data: user })
+    return res.json({ data: user, accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }

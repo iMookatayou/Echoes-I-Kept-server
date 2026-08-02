@@ -4,7 +4,8 @@ import { HttpError } from '../utils/httpError.js'
 
 export async function requireAuth(req, _res, next) {
   try {
-    const token = req.cookies?.access_token
+    const authHeader = req.headers.authorization
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
     if (!token) {
       throw new HttpError(401, 'UNAUTHORIZED', 'Authentication required')
     }

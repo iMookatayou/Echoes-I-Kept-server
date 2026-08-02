@@ -12,6 +12,7 @@ import { requireAuth } from '../middleware/requireAuth.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import {
   loginSchema,
+  refreshTokenSchema,
   resetPasswordSchema,
   signupSchema,
   updateProfileSchema,
@@ -21,8 +22,8 @@ const authRouter = Router()
 
 authRouter.post('/signup', validateRequest({ body: signupSchema }), signup)
 authRouter.post('/login', validateRequest({ body: loginSchema }), login)
-authRouter.post('/refresh', refresh)
-authRouter.post('/logout', logout)
+authRouter.post('/refresh', validateRequest({ body: refreshTokenSchema }), refresh)
+authRouter.post('/logout', validateRequest({ body: refreshTokenSchema }), logout)
 
 authRouter.get('/me', requireAuth, me)
 authRouter.put(
