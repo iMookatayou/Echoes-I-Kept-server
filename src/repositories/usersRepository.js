@@ -166,6 +166,27 @@ export async function updateUserPassword(id, passwordHash) {
   return toUser(data)
 }
 
+export async function getApprovedPostsCount(id) {
+  requireDatabase()
+  const { data, error } = await supabase
+    .from('users')
+    .select('approved_posts_count')
+    .eq('id', id)
+    .maybeSingle()
+
+  throwDatabaseError(error)
+  return data?.approved_posts_count || 0
+}
+
+// Monotonic — incremented once per post the first time it's approved, never
+// decremented, so a member's own edit-reverts-to-pending action can never
+// shrink their submission tier.
+export async function incrementApprovedPostsCount(id) {
+  requireDatabase()
+  const { error } = await supabase.rpc('increment_approved_posts_count', { target_user_id: id })
+  throwDatabaseError(error)
+}
+
 export async function bumpTokenVersion(id) {
   requireDatabase()
   const { error } = await supabase.rpc('increment_token_version', { target_user_id: id })

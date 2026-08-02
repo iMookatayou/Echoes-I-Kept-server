@@ -6,10 +6,12 @@ import {
 } from '../controllers/commentsController.js'
 import { likePost, unlikePost } from '../controllers/likesController.js'
 import {
+  approvePost,
   createPost,
   deletePost,
   getPost,
   listPosts,
+  rejectPost,
   updatePost,
 } from '../controllers/postsController.js'
 import { optionalAuth } from '../middleware/optionalAuth.js'
@@ -25,6 +27,7 @@ import {
   createPostSchema,
   listPostsQuerySchema,
   postIdParamsSchema,
+  rejectPostSchema,
   updatePostSchema,
 } from '../schemas/postSchema.js'
 
@@ -47,7 +50,6 @@ postsRouter.get(
 postsRouter.post(
   '/',
   requireAuth,
-  requireAdmin,
   validateRequest({ body: createPostSchema }),
   createPost,
 )
@@ -55,7 +57,6 @@ postsRouter.post(
 postsRouter.put(
   '/:id',
   requireAuth,
-  requireAdmin,
   validateRequest({ params: postIdParamsSchema, body: updatePostSchema }),
   updatePost,
 )
@@ -63,9 +64,24 @@ postsRouter.put(
 postsRouter.delete(
   '/:id',
   requireAuth,
-  requireAdmin,
   validateRequest({ params: postIdParamsSchema }),
   deletePost,
+)
+
+postsRouter.put(
+  '/:id/approve',
+  requireAuth,
+  requireAdmin,
+  validateRequest({ params: postIdParamsSchema }),
+  approvePost,
+)
+
+postsRouter.put(
+  '/:id/reject',
+  requireAuth,
+  requireAdmin,
+  validateRequest({ params: postIdParamsSchema, body: rejectPostSchema }),
+  rejectPost,
 )
 
 postsRouter.get(
