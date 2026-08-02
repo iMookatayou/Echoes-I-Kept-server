@@ -44,13 +44,16 @@ export async function revoke(id) {
 
 export async function revokeByHash(hash) {
   requireDatabase()
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('refresh_tokens')
     .update({ revoked_at: new Date().toISOString() })
     .eq('token_hash', hash)
     .is('revoked_at', null)
+    .select('id')
+    .maybeSingle()
 
   throwDatabaseError(error)
+  return Boolean(data)
 }
 
 export async function revokeAllForUser(userId) {
