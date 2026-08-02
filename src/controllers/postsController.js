@@ -42,7 +42,9 @@ export async function listPosts(req, res, next) {
     let effectiveQuery = query
 
     if (req.user?.role === 'admin') {
-      // pass through unchanged — admins can query any status/author
+      // Admins can query any status/author, but still honour `mine` so an
+      // admin's own "my submissions" view doesn't silently return everyone's.
+      if (query.mine) effectiveQuery = { ...query, authorId: req.user.id }
     } else if (query.mine && req.user) {
       effectiveQuery = { ...query, authorId: req.user.id }
     } else if (query.status !== 'published') {
@@ -94,6 +96,9 @@ export async function createPost(req, res, next) {
       await assertUnderSubmissionCap(req.user.id)
 
       const author = await usersRepository.getUserById(req.user.id)
+      if (!author) {
+        throw new HttpError(401, 'UNAUTHORIZED', 'Invalid or expired session')
+      }
       payload = {
         ...payload,
         status: 'pending',
@@ -131,9 +136,32 @@ export async function updatePost(req, res, next) {
       payload = { ...payload, status: 'pending', publishedAt: null }
     }
 
+    // An admin can also publish a member's post straight from the edit form
+    // rather than the approve endpoint — that still counts as the post going
+    // live, so it has to do the same bookkeeping.
+    const isFirstPublish =
+      req.user.role === 'admin' &&
+      payload.status === 'published' &&
+      !existing.firstPublishedAt &&
+      Boolean(existing.authorId)
+
     const post = await postsRepository.updatePost(req.validated.params.id, payload)
     if (!post) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
+    }
+
+    if (isFirstPublish) {
+      usersRepository.incrementApprovedPostsCount(existing.authorId).catch(() => {})
+      notificationsRepository
+        .create({
+          userId: existing.authorId,
+          type: 'post_approved',
+          actorName: 'Echoes I Kept',
+          action: 'Your post was approved and is now live:',
+          articleId: post.id,
+          articleTitle: post.title,
+        })
+        .catch(() => {})
     }
 
     return res.json({ data: post })
@@ -153,7 +181,10 @@ export async function deletePost(req, res, next) {
       if (!isOwner(existing, req.user)) {
         throw new HttpError(403, 'FORBIDDEN', 'You can only delete your own posts')
       }
-      if (existing.status === 'published') {
+      // Gate on "was ever published", not the current status — otherwise a
+      // member could edit a published post (which forces it back to pending)
+      // and then delete it, sidestepping this check in two ordinary requests.
+      if (existing.firstPublishedAt) {
         throw new HttpError(403, 'FORBIDDEN', 'Only an admin can delete a published post')
       }
     }
@@ -187,9 +218,16 @@ export async function approvePost(req, res, next) {
       publishedAt: existing.publishedAt || now,
       firstPublishedAt: existing.firstPublishedAt || now,
     })
+    if (!post) {
+      throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
+    }
 
     if (existing.authorId) {
-      usersRepository.incrementApprovedPostsCount(existing.authorId).catch(() => {})
+      // Only on a post's *first* publication — otherwise a member could farm
+      // their tier by repeatedly editing and re-approving a single post.
+      if (!existing.firstPublishedAt) {
+        usersRepository.incrementApprovedPostsCount(existing.authorId).catch(() => {})
+      }
 
       notificationsRepository
         .create({
@@ -228,6 +266,9 @@ export async function rejectPost(req, res, next) {
       publishedAt: existing.publishedAt,
       firstPublishedAt: existing.firstPublishedAt,
     })
+    if (!post) {
+      throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
+    }
 
     if (existing.authorId) {
       notificationsRepository

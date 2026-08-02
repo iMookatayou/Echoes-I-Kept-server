@@ -89,10 +89,23 @@ async function findCategory(category) {
 // (see postSchema.js), so an admin editing someone else's post can never
 // overwrite its byline.
 function toPostRow(payload, categoryId, existingPost = null) {
+  const now = new Date().toISOString()
   const publishedAt =
     payload.status === 'published'
-      ? payload.publishedAt || existingPost?.publishedAt || new Date().toISOString()
+      ? payload.publishedAt || existingPost?.publishedAt || now
       : null
+
+  // Stamped the first time a post goes live and never cleared afterwards, so
+  // reverting to pending for a re-review doesn't lose the original date — and
+  // so it stays correct even when an admin publishes via a plain edit rather
+  // than the approve endpoint.
+  const firstPublishedAt =
+    existingPost?.firstPublishedAt || (payload.status === 'published' ? now : null)
+
+  // A rejection is a verdict on specific content, so it stops applying once
+  // that content is edited — but an admin editing a post that stays rejected
+  // should keep the reason the author is being shown.
+  const keepsRejection = payload.status === 'rejected'
 
   return {
     category_id: categoryId,
@@ -110,9 +123,12 @@ function toPostRow(payload, categoryId, existingPost = null) {
     author_avatar_url: existingPost ? existingPost.authorAvatar : payload.authorAvatar || null,
     author_bio: existingPost ? existingPost.authorBio : payload.authorBio,
     published_at: publishedAt,
-    // Any prior rejection was a verdict on the old content — it no longer
-    // applies once that content has been edited (or the post just created).
-    rejection_reason: null,
+    first_published_at: firstPublishedAt,
+    rejection_reason: keepsRejection ? existingPost?.rejectionReason ?? null : null,
+    // A resubmission is awaiting a fresh verdict — don't keep advertising the
+    // previous moderator/timestamp on it.
+    moderated_by: keepsRejection ? existingPost?.moderatedBy ?? null : null,
+    moderated_at: keepsRejection ? existingPost?.moderatedAt ?? null : null,
   }
 }
 
