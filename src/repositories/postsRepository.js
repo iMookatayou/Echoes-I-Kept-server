@@ -20,6 +20,10 @@ const postSelection = `
   author_avatar_url,
   author_bio,
   likes_count,
+  rejection_reason,
+  moderated_by,
+  moderated_at,
+  first_published_at,
   published_at,
   created_at,
   updated_at,
@@ -50,7 +54,11 @@ function toPost(row) {
     authorAvatar: row.author_avatar_url,
     authorBio: row.author_bio || [],
     likesCount: row.likes_count,
-    date: (row.published_at || row.created_at).slice(0, 10),
+    rejectionReason: row.rejection_reason,
+    moderatedBy: row.moderated_by,
+    moderatedAt: row.moderated_at,
+    firstPublishedAt: row.first_published_at,
+    date: (row.first_published_at || row.published_at || row.created_at).slice(0, 10),
     publishedAt: row.published_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -75,10 +83,15 @@ async function findCategory(category) {
   return data
 }
 
-function toPostRow(payload, categoryId, existingPublishedAt = null) {
+// Author identity is only ever taken from `payload` on create. On update,
+// `existingPost`'s author fields are carried forward untouched regardless of
+// what's in `payload` — updatePostSchema doesn't even accept author fields
+// (see postSchema.js), so an admin editing someone else's post can never
+// overwrite its byline.
+function toPostRow(payload, categoryId, existingPost = null) {
   const publishedAt =
     payload.status === 'published'
-      ? payload.publishedAt || existingPublishedAt || new Date().toISOString()
+      ? payload.publishedAt || existingPost?.publishedAt || new Date().toISOString()
       : null
 
   return {
@@ -93,14 +106,17 @@ function toPostRow(payload, categoryId, existingPublishedAt = null) {
     description: payload.description,
     content: payload.content,
     status: payload.status,
-    author_name: payload.authorName,
-    author_avatar_url: payload.authorAvatar || null,
-    author_bio: payload.authorBio,
+    author_name: existingPost ? existingPost.author : payload.authorName,
+    author_avatar_url: existingPost ? existingPost.authorAvatar : payload.authorAvatar || null,
+    author_bio: existingPost ? existingPost.authorBio : payload.authorBio,
     published_at: publishedAt,
+    // Any prior rejection was a verdict on the old content — it no longer
+    // applies once that content has been edited (or the post just created).
+    rejection_reason: null,
   }
 }
 
-export async function listPosts({ page, limit, status, category, search }) {
+export async function listPosts({ page, limit, status, category, search, authorId }) {
   requireDatabase()
   const from = (page - 1) * limit
   const to = from + limit - 1
@@ -112,6 +128,7 @@ export async function listPosts({ page, limit, status, category, search }) {
     .range(from, to)
 
   if (status !== 'all') query = query.eq('status', status)
+  if (authorId) query = query.eq('author_id', authorId)
   if (category) query = query.eq('categories.slug', toSlug(category))
 
   const cleanSearch = search ? sanitizeSearch(search) : ''
@@ -164,13 +181,52 @@ export async function updatePost(id, payload) {
   const category = await findCategory(payload.category)
   const { data, error } = await supabase
     .from('posts')
-    .update(toPostRow(payload, category.id, existingPost.publishedAt))
+    .update(toPostRow(payload, category.id, existingPost))
     .eq('id', id)
     .select(postSelection)
     .maybeSingle()
 
   throwDatabaseError(error)
   return data ? toPost(data) : null
+}
+
+// Minimal partial update for moderation actions — deliberately bypasses
+// toPostRow/findCategory, which assume a full content payload and would
+// either 400 (no category in the payload) or null out title/content/image
+// if reused for a status-only change.
+export async function updatePostModeration(
+  id,
+  { status, rejectionReason, moderatedBy, publishedAt, firstPublishedAt },
+) {
+  requireDatabase()
+  const { data, error } = await supabase
+    .from('posts')
+    .update({
+      status,
+      rejection_reason: rejectionReason ?? null,
+      moderated_by: moderatedBy,
+      moderated_at: new Date().toISOString(),
+      published_at: publishedAt ?? null,
+      first_published_at: firstPublishedAt ?? null,
+    })
+    .eq('id', id)
+    .select(postSelection)
+    .maybeSingle()
+
+  throwDatabaseError(error)
+  return data ? toPost(data) : null
+}
+
+export async function countByAuthorAndStatus(authorId, status) {
+  requireDatabase()
+  const { count, error } = await supabase
+    .from('posts')
+    .select('id', { count: 'exact', head: true })
+    .eq('author_id', authorId)
+    .eq('status', status)
+
+  throwDatabaseError(error)
+  return count || 0
 }
 
 export async function deletePost(id) {

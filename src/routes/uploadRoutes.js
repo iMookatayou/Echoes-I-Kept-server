@@ -1,7 +1,6 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { uploadImage } from '../controllers/uploadsController.js'
-import { requireAdmin } from '../middleware/requireAdmin.js'
 import { requireAuth } from '../middleware/requireAuth.js'
 import { HttpError } from '../utils/httpError.js'
 
@@ -21,6 +20,6 @@ const upload = multer({
 
 const uploadRouter = Router()
 
-uploadRouter.post('/', requireAuth, requireAdmin, upload.single('image'), uploadImage)
+uploadRouter.post('/', requireAuth, upload.single('image'), uploadImage)
 
 export default uploadRouter

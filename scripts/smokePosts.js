@@ -36,20 +36,26 @@ const createPayload = {
 
 let createdId
 
+// The 6 posts seeded in supabase/seed.sql always have ids 1-6 — asserting on
+// their presence (rather than an absolute total/length) keeps this script
+// passing once member-submitted posts start getting approved alongside them.
+const seedPostIds = [1, 2, 3, 4, 5, 6]
+
 try {
-  const list = await request('/api/posts?status=published&page=1&limit=6')
+  const list = await request('/api/posts?status=published&page=1&limit=50')
   assert(list.response.status === 200, 'GET /api/posts should return 200')
   assert(Array.isArray(list.body.data), 'GET /api/posts should return a data array')
-  assert(list.body.data.length === 6, 'Seeded published post list should contain 6 posts')
+  const seedPostsInList = list.body.data.filter((post) => seedPostIds.includes(post.id))
+  assert(seedPostsInList.length === 6, 'All 6 seeded published posts should appear in the list')
 
   const page = await request('/api/posts?status=published&page=2&limit=2')
   assert(page.response.status === 200, 'Paginated GET should return 200')
   assert(page.body.data.length === 2, 'Page 2 with limit 2 should contain 2 posts')
-  assert(page.body.pagination.total === 6, 'Pagination should report 6 seeded posts')
+  assert(page.body.pagination.total >= 6, 'Pagination should report at least the 6 seeded posts')
 
   const category = await request('/api/posts?category=alternative&limit=10')
   assert(category.response.status === 200, 'Category filter should return 200')
-  assert(category.body.data.length === 2, 'Alternative category should contain 2 posts')
+  assert(category.body.data.length >= 2, 'Alternative category should contain at least 2 posts')
 
   const search = await request('/api/posts?search=Daylight&limit=10')
   assert(search.response.status === 200, 'Search filter should return 200')
