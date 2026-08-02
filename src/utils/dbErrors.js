@@ -14,6 +14,16 @@ export function requireDatabase() {
 export function throwDatabaseError(error) {
   if (!error) return
 
+  // Raised by the posts_enforce_pending_submission_cap trigger, which is the
+  // race-proof backstop behind the controller's own cap check.
+  if (error.message?.includes('SUBMISSION_LIMIT')) {
+    throw new HttpError(
+      429,
+      'SUBMISSION_LIMIT',
+      'You already have the maximum number of posts awaiting review',
+    )
+  }
+
   if (error.code === '23505') {
     throw new HttpError(409, 'CONFLICT', 'A record with this value already exists')
   }
