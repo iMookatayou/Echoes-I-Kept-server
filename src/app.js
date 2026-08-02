@@ -4,6 +4,7 @@ import morgan from 'morgan'
 import authRouter from './routes/authRoutes.js'
 import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
+import notificationRouter from './routes/notificationRoutes.js'
 import postsRouter from './routes/postsRoutes.js'
 import uploadRouter from './routes/uploadRoutes.js'
 import usersRouter from './routes/usersRoutes.js'
@@ -28,6 +29,7 @@ app.get('/', (_req, res) => {
       '/api/categories',
       '/api/auth',
       '/api/users',
+      '/api/notifications',
     ],
   })
 })
@@ -63,6 +65,7 @@ app.use('/api/uploads', uploadRouter)
 app.use('/api/categories', categoriesRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/users', usersRouter)
+app.use('/api/notifications', notificationRouter)
 app.use(notFoundHandler)
 app.use(errorHandler)
 
