@@ -92,9 +92,14 @@ export async function refresh(req, res, next) {
 export async function logout(req, res, next) {
   try {
     const { refreshToken: token } = req.validated.body
-    await refreshTokensRepository.revokeByHash(hashToken(token))
+    const tokenRevoked = await refreshTokensRepository.revokeByHash(hashToken(token))
 
-    return res.json({ ok: true })
+    return res.json({
+      data: {
+        loggedOut: true,
+        tokenRevoked,
+      },
+    })
   } catch (error) {
     return next(error)
   }
