@@ -6,7 +6,8 @@ import {
   listCategories,
   updateCategory,
 } from '../controllers/categoriesController.js'
-import { localMutationOnly } from '../middleware/localMutationOnly.js'
+import { requireAdmin } from '../middleware/requireAdmin.js'
+import { requireAuth } from '../middleware/requireAuth.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import {
   categoryIdParamsSchema,
@@ -26,21 +27,24 @@ categoriesRouter.get(
 
 categoriesRouter.post(
   '/',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ body: createCategorySchema }),
   createCategory,
 )
 
 categoriesRouter.put(
   '/:id',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ params: categoryIdParamsSchema, body: updateCategorySchema }),
   updateCategory,
 )
 
 categoriesRouter.delete(
   '/:id',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ params: categoryIdParamsSchema }),
   deleteCategory,
 )

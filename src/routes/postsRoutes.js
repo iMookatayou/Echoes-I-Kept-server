@@ -6,7 +6,8 @@ import {
   listPosts,
   updatePost,
 } from '../controllers/postsController.js'
-import { localMutationOnly } from '../middleware/localMutationOnly.js'
+import { requireAdmin } from '../middleware/requireAdmin.js'
+import { requireAuth } from '../middleware/requireAuth.js'
 import { validateRequest } from '../middleware/validateRequest.js'
 import {
   createPostSchema,
@@ -31,21 +32,24 @@ postsRouter.get(
 
 postsRouter.post(
   '/',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ body: createPostSchema }),
   createPost,
 )
 
 postsRouter.put(
   '/:id',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ params: postIdParamsSchema, body: updatePostSchema }),
   updatePost,
 )
 
 postsRouter.delete(
   '/:id',
-  localMutationOnly,
+  requireAuth,
+  requireAdmin,
   validateRequest({ params: postIdParamsSchema }),
   deletePost,
 )
