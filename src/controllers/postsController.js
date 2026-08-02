@@ -177,16 +177,11 @@ export async function deletePost(req, res, next) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post was not found')
     }
 
-    if (req.user.role !== 'admin') {
-      if (!isOwner(existing, req.user)) {
-        throw new HttpError(403, 'FORBIDDEN', 'You can only delete your own posts')
-      }
-      // Gate on "was ever published", not the current status — otherwise a
-      // member could edit a published post (which forces it back to pending)
-      // and then delete it, sidestepping this check in two ordinary requests.
-      if (existing.firstPublishedAt) {
-        throw new HttpError(403, 'FORBIDDEN', 'Only an admin can delete a published post')
-      }
+    // Authors have full control over their own work, published or not.
+    // Note this cascades: deleting a published post also removes its comments
+    // and likes, and detaches it from any notification that referenced it.
+    if (req.user.role !== 'admin' && !isOwner(existing, req.user)) {
+      throw new HttpError(403, 'FORBIDDEN', 'You can only delete your own posts')
     }
 
     const deleted = await postsRepository.deletePost(req.validated.params.id)
