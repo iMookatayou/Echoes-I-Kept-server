@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { supabase } from '../supabaseClient.js'
 import { HttpError } from '../utils/httpError.js'
 
-const BUCKET = 'post-images'
+const BUCKET = 'Echoes-I-Kept'
 const EXTENSION_BY_MIME = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
