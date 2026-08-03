@@ -92,12 +92,11 @@ export async function createPost(req, res, next) {
   try {
     let payload = req.validated.body
 
-    // Every post starts pending, regardless of who creates it — the only
-    // difference for an admin is the ability to change the status
-    // afterward (see updatePost), not to skip pending on create. The
-    // submission cap is a spam control, though, so it only applies to
-    // non-admins.
-    if (req.user.role !== 'admin') {
+    // Create can only ever result in 'draft' or 'pending', for anyone —
+    // 'published'/'rejected' always gets forced to 'pending' instead. The
+    // submission cap only applies to a non-admin's 'pending' result.
+    const status = payload.status === 'draft' ? 'draft' : 'pending'
+    if (status === 'pending' && req.user.role !== 'admin') {
       await assertUnderSubmissionCap(req.user.id)
     }
 
@@ -107,7 +106,7 @@ export async function createPost(req, res, next) {
     }
     payload = {
       ...payload,
-      status: 'pending',
+      status,
       publishedAt: null,
       authorName: [author.firstName, author.lastName].filter(Boolean).join(' ') || author.username,
       authorAvatar: author.profilePic,
@@ -135,10 +134,14 @@ export async function updatePost(req, res, next) {
     let payload = req.validated.body
 
     if (req.user.role !== 'admin') {
-      if (existing.status !== 'pending') {
+      // Same 'draft' allowance as createPost. Cap only applies when this
+      // edit actually adds a pending slot — moving into or staying in
+      // 'draft' never does, and staying 'pending' doesn't add a new one.
+      const status = payload.status === 'draft' ? 'draft' : 'pending'
+      if (status === 'pending' && existing.status !== 'pending') {
         await assertUnderSubmissionCap(req.user.id)
       }
-      payload = { ...payload, status: 'pending', publishedAt: null }
+      payload = { ...payload, status, publishedAt: null }
     }
 
     // An admin can also publish a member's post straight from the edit form

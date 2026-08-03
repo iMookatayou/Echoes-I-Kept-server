@@ -39,7 +39,7 @@ const authorFieldsSchema = z.object({
 })
 
 export const createPostSchema = contentFieldsSchema.merge(authorFieldsSchema).extend({
-  status: statusSchema.default('draft'),
+  status: statusSchema.default('pending'),
 })
 
 // Author identity is set at creation time and preserved by the repository on
