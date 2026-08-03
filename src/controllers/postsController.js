@@ -2,7 +2,11 @@ import * as postsRepository from '../repositories/postsRepository.js'
 import * as likesRepository from '../repositories/likesRepository.js'
 import * as usersRepository from '../repositories/usersRepository.js'
 import * as notificationsRepository from '../repositories/notificationsRepository.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
+
+const SYSTEM_ACTOR_NAME = 'Echoes I Kept'
+const SYSTEM_ACTOR_AVATAR = defaultAvatarUrl('Echoes', 'I Kept')
 
 // Cap scales with the member's track record of already-approved posts, so
 // spam/new accounts are the most constrained and it eases up as trust builds.
@@ -164,7 +168,8 @@ export async function updatePost(req, res, next) {
         .create({
           userId: existing.authorId,
           type: 'post_approved',
-          actorName: 'Echoes I Kept',
+          actorName: SYSTEM_ACTOR_NAME,
+          actorAvatar: SYSTEM_ACTOR_AVATAR,
           action: 'Your post was approved and is now live:',
           articleId: post.id,
           articleTitle: post.title,
@@ -236,7 +241,8 @@ export async function approvePost(req, res, next) {
         .create({
           userId: existing.authorId,
           type: 'post_approved',
-          actorName: 'Echoes I Kept',
+          actorName: SYSTEM_ACTOR_NAME,
+          actorAvatar: SYSTEM_ACTOR_AVATAR,
           action: 'Your post was approved and is now live:',
           articleId: post.id,
           articleTitle: post.title,
@@ -278,7 +284,8 @@ export async function rejectPost(req, res, next) {
         .create({
           userId: existing.authorId,
           type: 'post_rejected',
-          actorName: 'Echoes I Kept',
+          actorName: SYSTEM_ACTOR_NAME,
+          actorAvatar: SYSTEM_ACTOR_AVATAR,
           action: 'Your post was not approved:',
           message: reason,
           articleId: post.id,
