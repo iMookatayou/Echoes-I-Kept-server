@@ -92,21 +92,26 @@ export async function createPost(req, res, next) {
   try {
     let payload = req.validated.body
 
+    // Every post starts pending, regardless of who creates it — the only
+    // difference for an admin is the ability to change the status
+    // afterward (see updatePost), not to skip pending on create. The
+    // submission cap is a spam control, though, so it only applies to
+    // non-admins.
     if (req.user.role !== 'admin') {
       await assertUnderSubmissionCap(req.user.id)
+    }
 
-      const author = await usersRepository.getUserById(req.user.id)
-      if (!author) {
-        throw new HttpError(401, 'UNAUTHORIZED', 'Invalid or expired session')
-      }
-      payload = {
-        ...payload,
-        status: 'pending',
-        publishedAt: null,
-        authorName: [author.firstName, author.lastName].filter(Boolean).join(' ') || author.username,
-        authorAvatar: author.profilePic,
-        authorBio: [],
-      }
+    const author = await usersRepository.getUserById(req.user.id)
+    if (!author) {
+      throw new HttpError(401, 'UNAUTHORIZED', 'Invalid or expired session')
+    }
+    payload = {
+      ...payload,
+      status: 'pending',
+      publishedAt: null,
+      authorName: [author.firstName, author.lastName].filter(Boolean).join(' ') || author.username,
+      authorAvatar: author.profilePic,
+      authorBio: [],
     }
 
     const post = await postsRepository.createPost(payload, req.user.id)
