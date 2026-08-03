@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient.js'
 import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 
 const commentSelection = `
   id,
@@ -23,7 +24,7 @@ function toComment(row) {
     commentText: row.comment_text,
     createdAt: row.created_at,
     authorName,
-    authorAvatar: user?.profile_pic || null,
+    authorAvatar: user ? user.profile_pic || defaultAvatarUrl(user.first_name, user.last_name) : null,
   }
 }
 
