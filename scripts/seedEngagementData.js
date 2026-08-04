@@ -168,5 +168,35 @@ for (const [postId, plan] of Object.entries(engagementByPostId)) {
   await seedPost(Number(postId), plan, users)
 }
 
-console.log('\nDone. To remove all of this later:')
+// Kept out of `seedUsers` on purpose — that array's index order is what the
+// `pick()`/`comment.offset` assignments above are keyed to, so adding
+// accounts here can't shift any of that. "Techin B." matches the byline
+// already used in the site's own copy (the hero's "A note from Techin B."),
+// so the admin account reads as the same person the site already claims
+// wrote it, not an unrelated test label.
+console.log('\nCreating a matching admin + member login...')
+const adminDesignate = await signupOrLogin({
+  firstName: 'Techin',
+  lastName: 'B.',
+  username: 'techin_b',
+})
+const memberDesignate = await signupOrLogin({
+  firstName: 'Maya',
+  lastName: 'Lindqvist',
+  username: 'maya_lindqvist',
+})
+
+console.log('\nDone. Logins (password for every seeded account is Demo2026!):')
+console.log(`  admin  : ${adminDesignate.username}@seed.local`)
+console.log(`  member : ${memberDesignate.username}@seed.local`)
+for (const user of users) {
+  console.log(`  member : ${user.username}@seed.local`)
+}
+
+console.log('\nPromote the admin account (not exposed over the API on purpose):')
+console.log(
+  `  update public.users set role = 'admin' where id = '${adminDesignate.id}';`,
+)
+
+console.log('\nTo remove all of this later:')
 console.log("  delete from users where email like '%@seed.local';")
