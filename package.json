@@ -12,7 +12,8 @@
     "db:reset": "supabase db reset",
     "db:env": "supabase status -o env > .env.local",
     "db:push": "supabase db push",
-    "test:posts": "node scripts/smokePosts.js"
+    "test:posts": "node scripts/smokePosts.js",
+    "seed:engagement": "node scripts/seedEngagementData.js"
   },
   "keywords": [],
   "author": "",
