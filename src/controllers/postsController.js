@@ -114,7 +114,7 @@ export async function createPost(req, res, next) {
       publishedAt: null,
       authorName: [author.firstName, author.lastName].filter(Boolean).join(' ') || author.username,
       authorAvatar: author.profilePic,
-      authorBio: [],
+      authorBio: author.bio || [],
     }
 
     const post = await postsRepository.createPost(payload, req.user.id)

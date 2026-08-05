@@ -4,7 +4,7 @@ import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
 import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 
 const userSelection =
-  'id, email, username, first_name, last_name, role, profile_pic, is_active, created_at, updated_at'
+  'id, email, username, first_name, last_name, role, profile_pic, bio, is_active, created_at, updated_at'
 
 const loginSelection = `${userSelection}, password_hash, token_version`
 
@@ -17,6 +17,7 @@ function toUser(row) {
     lastName: row.last_name,
     role: row.role,
     profilePic: row.profile_pic || defaultAvatarUrl(row.first_name, row.last_name),
+    bio: row.bio || [],
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -128,7 +129,7 @@ export async function createUser({ firstName, lastName, username, email, passwor
   return toUser(data)
 }
 
-export async function updateUser(id, { firstName, lastName, username, email, role, profilePic }) {
+export async function updateUser(id, { firstName, lastName, username, email, role, profilePic, bio }) {
   requireDatabase()
   const patch = {
     first_name: firstName,
@@ -138,6 +139,10 @@ export async function updateUser(id, { firstName, lastName, username, email, rol
     profile_pic: profilePic || null,
   }
   if (role) patch.role = role
+  // Distinct from `if (bio)` on purpose — admin member-management calls
+  // don't send bio at all (undefined, leave it alone), but a user clearing
+  // their own bio down to an empty array is a deliberate value to save.
+  if (bio !== undefined) patch.bio = bio
 
   const { data, error } = await supabase
     .from('users')
