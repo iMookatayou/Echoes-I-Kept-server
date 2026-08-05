@@ -121,7 +121,7 @@ export async function me(req, res, next) {
 
 export async function updateProfile(req, res, next) {
   try {
-    const { firstName, lastName, username, email, profilePic } = req.validated.body
+    const { firstName, lastName, username, email, profilePic, bio } = req.validated.body
 
     await usersRepository.checkUniqueFields({ email, username, excludeId: req.user.id })
     const user = await usersRepository.updateUser(req.user.id, {
@@ -130,6 +130,7 @@ export async function updateProfile(req, res, next) {
       username,
       email,
       profilePic: profilePic || defaultAvatarUrl(firstName, lastName),
+      bio,
     })
     if (!user) {
       throw new HttpError(404, 'USER_NOT_FOUND', 'User was not found')

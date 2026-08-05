@@ -32,6 +32,7 @@ export const updateProfileSchema = z.object({
   username: usernameSchema,
   email: z.string().trim().email(),
   profilePic: z.string().trim().min(1).nullable().optional(),
+  bio: z.array(z.string().trim().min(1)).max(10).optional(),
 })
 
 export const resetPasswordSchema = z.object({
