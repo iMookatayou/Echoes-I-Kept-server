@@ -4,7 +4,7 @@ import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
 import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 
 const userSelection =
-  'id, email, username, first_name, last_name, role, profile_pic, bio, is_active, created_at, updated_at'
+  'id, email, username, first_name, last_name, role, profile_pic, bio, email_verified, is_active, created_at, updated_at'
 
 const loginSelection = `${userSelection}, password_hash, token_version`
 
@@ -18,6 +18,7 @@ function toUser(row) {
     role: row.role,
     profilePic: row.profile_pic || defaultAvatarUrl(row.first_name, row.last_name),
     bio: row.bio || [],
+    emailVerified: row.email_verified,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -109,7 +110,16 @@ export async function checkUniqueFields({ email, username, excludeId }) {
   }
 }
 
-export async function createUser({ firstName, lastName, username, email, passwordHash, role, profilePic }) {
+export async function createUser({
+  firstName,
+  lastName,
+  username,
+  email,
+  passwordHash,
+  role,
+  profilePic,
+  emailVerified = true,
+}) {
   requireDatabase()
   const { data, error } = await supabase
     .from('users')
@@ -121,6 +131,7 @@ export async function createUser({ firstName, lastName, username, email, passwor
       password_hash: passwordHash,
       role,
       profile_pic: profilePic || null,
+      email_verified: emailVerified,
     })
     .select(userSelection)
     .single()
@@ -147,6 +158,19 @@ export async function updateUser(id, { firstName, lastName, username, email, rol
   const { data, error } = await supabase
     .from('users')
     .update(patch)
+    .eq('id', id)
+    .select(userSelection)
+    .maybeSingle()
+
+  throwDatabaseError(error)
+  return data ? toUser(data) : null
+}
+
+export async function markEmailVerified(id) {
+  requireDatabase()
+  const { data, error } = await supabase
+    .from('users')
+    .update({ email_verified: true })
     .eq('id', id)
     .select(userSelection)
     .maybeSingle()
