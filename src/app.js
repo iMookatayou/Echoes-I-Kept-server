@@ -13,6 +13,12 @@ import { hasSupabaseConfig, supabase } from './supabaseClient.js'
 const app = express()
 const port = process.env.PORT || 4000
 
+// Deployed behind a single reverse proxy (Vercel) — without this,
+// express-rate-limit sees every request as coming from the same upstream
+// IP (or throws on X-Forwarded-For validation), making the OTP endpoint
+// limiters useless.
+app.set('trust proxy', 1)
+
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }))
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use(express.json({ limit: '1mb' }))

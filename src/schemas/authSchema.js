@@ -43,3 +43,24 @@ export const resetPasswordSchema = z.object({
 export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(1),
 })
+
+const otpCodeSchema = z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code.')
+
+export const verifyEmailSchema = z.object({
+  email: z.string().trim().email(),
+  code: otpCodeSchema,
+})
+
+export const resendVerificationSchema = z.object({
+  email: z.string().trim().email(),
+})
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().trim().email(),
+})
+
+export const resetPasswordWithCodeSchema = z.object({
+  email: z.string().trim().email(),
+  code: otpCodeSchema,
+  newPassword: passwordSchema,
+})
