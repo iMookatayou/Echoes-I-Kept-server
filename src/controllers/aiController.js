@@ -128,6 +128,13 @@ const moderateOutput = z.object({
   suggestedRejectionReason: z.string(),
 })
 
+// Bounds a stored field before it becomes prompt text. Nullable columns come
+// back as null, which buildModerateUserMessage renders as the string "null" —
+// an empty string reads better and says the same thing.
+function clampField(value, max = 240) {
+  return typeof value === 'string' ? value.slice(0, max) : ''
+}
+
 function requireGemini() {
   if (!hasGeminiConfig()) {
     throw new HttpError(
@@ -392,10 +399,14 @@ export async function moderatePost(req, res, next) {
       claim,
       system: MODERATE_SYSTEM,
       userMessage: buildModerateUserMessage({
-        title: post.title,
-        artist: post.artist,
-        bestPick: post.bestPick,
-        description: post.description,
+        // Every field is clamped, not just content. postSchema now caps these
+        // on the way in, but rows written before that cap existed aren't
+        // bounded by it, and this is the one path that reads stored text
+        // straight into a prompt priced per input token.
+        title: clampField(post.title),
+        artist: clampField(post.artist),
+        bestPick: clampField(post.bestPick),
+        description: clampField(post.description, 2000),
         // Unlike the client-supplied paths, this text comes from a stored row,
         // and posts.content has no length ceiling — so without this a single
         // moderation call could ship hundreds of thousands of input tokens.

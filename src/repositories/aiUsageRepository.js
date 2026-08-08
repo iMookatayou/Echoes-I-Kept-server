@@ -20,7 +20,12 @@ export async function consumeQuota(userId, dailyLimit) {
   return {
     allowed: Boolean(row?.allowed),
     used: row?.used ?? 0,
-    chargedDate: row?.charged_date ?? null,
+    // undefined, not null: supabase-js omits undefined keys, so a DB still on
+    // the pre-202608090001 functions (deployed before db:push) falls through
+    // to the zero-/one-arg refund wrappers that default to current_date.
+    // Sending null instead would either miss the overload entirely or run
+    // `where usage_date = NULL`, silently refunding nothing.
+    chargedDate: row?.charged_date ?? undefined,
   }
 }
 
@@ -28,9 +33,11 @@ export async function consumeQuota(userId, dailyLimit) {
 // for never reached the model — a transport failure, not a real attempt.
 export async function refundQuota(userId, chargedDate) {
   requireDatabase()
+  // The key is omitted rather than sent as null when the date is unknown —
+  // that's what selects the one-arg wrapper, which defaults to current_date.
   const { error } = await supabase.rpc('refund_ai_quota', {
     target_user_id: userId,
-    target_date: chargedDate,
+    ...(chargedDate ? { target_date: chargedDate } : {}),
   })
   throwDatabaseError(error)
 }
@@ -52,14 +59,21 @@ export async function consumeGlobalQuota(dailyLimit) {
   return {
     allowed: Boolean(row?.allowed),
     used: row?.used ?? 0,
-    chargedDate: row?.charged_date ?? null,
+    // undefined, not null: supabase-js omits undefined keys, so a DB still on
+    // the pre-202608090001 functions (deployed before db:push) falls through
+    // to the zero-/one-arg refund wrappers that default to current_date.
+    // Sending null instead would either miss the overload entirely or run
+    // `where usage_date = NULL`, silently refunding nothing.
+    chargedDate: row?.charged_date ?? undefined,
   }
 }
 
 export async function refundGlobalQuota(chargedDate) {
   requireDatabase()
-  const { error } = await supabase.rpc('refund_global_ai_quota', {
-    target_date: chargedDate,
-  })
+  // Same as refundQuota: no key means the zero-arg wrapper, not a null date.
+  const { error } = await supabase.rpc(
+    'refund_global_ai_quota',
+    chargedDate ? { target_date: chargedDate } : {},
+  )
   throwDatabaseError(error)
 }

@@ -138,6 +138,27 @@ as $$
   select public.refund_global_ai_quota(current_date);
 $$;
 
+-- Supabase's bootstrap sets `alter default privileges in schema public grant
+-- all on functions to postgres, anon, authenticated, service_role`, so a
+-- freshly created function in this schema is callable through PostgREST with
+-- the project's anon key — which is public by design. These are all
+-- SECURITY DEFINER and therefore bypass the RLS enabled on the quota tables,
+-- so without an explicit revoke anyone could:
+--
+--   * loop refund_global_ai_quota() to zero the shared counter, defeating the
+--     gate that keeps us under Google's real daily cap, or
+--   * loop consume_ai_quota(<victim uuid>, 1) to burn a member's allowance.
+--
+-- Revoke first, then grant: `drop function` above also discarded whatever
+-- grants the originals carried, so every signature is re-established here.
+-- Only this backend ever calls them, and it uses the service-role key.
+revoke all on function public.consume_ai_quota(uuid, int) from public, anon, authenticated;
+revoke all on function public.consume_global_ai_quota(int) from public, anon, authenticated;
+revoke all on function public.refund_ai_quota(uuid, date) from public, anon, authenticated;
+revoke all on function public.refund_global_ai_quota(date) from public, anon, authenticated;
+revoke all on function public.refund_ai_quota(uuid) from public, anon, authenticated;
+revoke all on function public.refund_global_ai_quota() from public, anon, authenticated;
+
 grant execute on function public.consume_ai_quota(uuid, int) to service_role;
 grant execute on function public.consume_global_ai_quota(int) to service_role;
 grant execute on function public.refund_ai_quota(uuid, date) to service_role;

@@ -1,6 +1,13 @@
 import { z } from 'zod'
 
 const optionalText = z.string().trim().min(1).nullable().optional()
+
+// Single-line metadata (artist, song title, URL). These had no ceiling at all,
+// so the only limit was express.json()'s 1mb body cap — which mattered once
+// /api/ai/moderate started reading stored rows and feeding them to a model
+// priced per input token. 240 matches `title` and is far beyond any real
+// artist or track name.
+const optionalShortText = z.string().trim().min(1).max(240).nullable().optional()
 const statusSchema = z.enum(['draft', 'pending', 'published', 'rejected'])
 
 // Images are either uploaded (absolute Supabase storage URL) or reference a
@@ -20,9 +27,9 @@ const optionalImageSchema = z
 
 const contentFieldsSchema = z.object({
   category: z.string().trim().min(1).max(80),
-  artist: optionalText,
-  bestPick: optionalText,
-  spotifyUrl: optionalText,
+  artist: optionalShortText,
+  bestPick: optionalShortText,
+  spotifyUrl: optionalShortText,
   image: imageSchema,
   detailImage: optionalImageSchema,
   detailImagePosition: z.string().trim().min(1).default('center'),

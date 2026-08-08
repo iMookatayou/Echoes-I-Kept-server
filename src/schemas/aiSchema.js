@@ -11,9 +11,10 @@ export const AI_INPUT_MAX_CHARS = 20_000
 
 const draftContent = z.string().trim().min(1).max(AI_INPUT_MAX_CHARS)
 
-// Mirrors the matching caps in postSchema.contentFieldsSchema. They have to
-// agree: a field the post routes accept but these reject means text a member
-// can publish but not run the assistant over.
+// Mirrors the matching caps in postSchema.contentFieldsSchema — 240 for
+// title/artist/bestPick, 2000 for description. They have to agree: a field the
+// post routes accept but these reject means text a member can publish but not
+// run the assistant over.
 const titleField = z.string().trim().max(240)
 const descriptionField = z.string().trim().max(2000)
 
