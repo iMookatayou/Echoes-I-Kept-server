@@ -1,6 +1,7 @@
 import cors from 'cors'
 import express from 'express'
 import morgan from 'morgan'
+import aiRouter from './routes/aiRoutes.js'
 import authRouter from './routes/authRoutes.js'
 import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
@@ -36,6 +37,7 @@ app.get('/', (_req, res) => {
       '/api/auth',
       '/api/users',
       '/api/notifications',
+      '/api/ai',
     ],
   })
 })
@@ -72,6 +74,7 @@ app.use('/api/categories', categoriesRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/users', usersRouter)
 app.use('/api/notifications', notificationRouter)
+app.use('/api/ai', aiRouter)
 app.use(notFoundHandler)
 app.use(errorHandler)
 
