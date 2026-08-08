@@ -8,6 +8,7 @@ import {
   refundQuota,
 } from '../repositories/aiUsageRepository.js'
 import { getPostById } from '../repositories/postsRepository.js'
+import { AI_INPUT_MAX_CHARS } from '../schemas/aiSchema.js'
 import {
   MODERATE_SYSTEM,
   POLISH_SYSTEM,
@@ -152,28 +153,50 @@ async function claimQuota(user) {
   }
 
   const limit = user.role === 'admin' ? DAILY_LIMIT.admin : DAILY_LIMIT.member
-  const { allowed, used } = await consumeQuota(user.id, limit)
-  if (!allowed) {
-    // The global slot was already spent reaching this check — hand it back,
-    // since this request is being rejected before it does anything with it.
-    await refundGlobalQuota().catch((error) => {
+
+  let personal
+  try {
+    personal = await consumeQuota(user.id, limit)
+  } catch (error) {
+    // The global slot is already spent at this point. Without this the shared
+    // budget drains one slot per failure — a transient Supabase error or a
+    // migration that hasn't been pushed would quietly take the whole site's
+    // AI budget offline for the day while every caller just sees a 500.
+    await refundGlobalQuota(global.chargedDate).catch((refundError) => {
+      console.error('[ai] global quota refund failed', refundError)
+    })
+    throw error
+  }
+
+  if (!personal.allowed) {
+    // Same reasoning — the global slot was spent reaching this check, and
+    // this request is being rejected before it does anything with it.
+    await refundGlobalQuota(global.chargedDate).catch((error) => {
       console.error('[ai] global quota refund failed', error)
     })
     throw new HttpError(
       429,
       'AI_QUOTA_EXCEEDED',
-      `You have used all ${limit} writing assistant requests for today (${used} used). Try again tomorrow.`,
+      `You have used all ${limit} writing assistant requests for today (${personal.used} used). Try again tomorrow.`,
     )
   }
+
+  // Carried so a later refund targets the rows that were actually charged,
+  // even if it lands on the other side of UTC midnight.
+  return { globalDate: global.chargedDate, userDate: personal.chargedDate }
 }
 
 // Undoes both counters claimQuota() incremented, for a call that never
 // reached the model. Failures are logged and swallowed — the caller should
 // still see the original error, not a refund-plumbing one.
-async function refundBothQuotas(userId) {
+async function refundBothQuotas(userId, claim) {
   await Promise.all([
-    refundQuota(userId).catch((error) => console.error('[ai] user quota refund failed', error)),
-    refundGlobalQuota().catch((error) => console.error('[ai] global quota refund failed', error)),
+    refundQuota(userId, claim?.userDate).catch((error) =>
+      console.error('[ai] user quota refund failed', error),
+    ),
+    refundGlobalQuota(claim?.globalDate).catch((error) =>
+      console.error('[ai] global quota refund failed', error),
+    ),
   ])
 }
 
@@ -187,9 +210,7 @@ const REFUSAL_FINISH_REASONS = new Set([
   'RECITATION',
 ])
 
-async function runStructured({ userId, system, userMessage, responseSchema, validator, maxOutputTokens }) {
-  requireGemini()
-
+async function runStructured({ userId, claim, system, userMessage, responseSchema, validator, maxOutputTokens }) {
   let response
   try {
     response = await gemini.models.generateContent({
@@ -219,7 +240,7 @@ async function runStructured({ userId, system, userMessage, responseSchema, vali
 
     // The call never reached the model, so it never cost anything — hand
     // back the slots claimQuota() reserved before this call.
-    await refundBothQuotas(userId)
+    await refundBothQuotas(userId, claim)
 
     // A 429 here means Google's own daily cap was hit despite our own
     // GLOBAL_DAILY_LIMIT gate — e.g. usage outside this app (manual testing
@@ -295,11 +316,16 @@ async function runStructured({ userId, system, userMessage, responseSchema, vali
 
 export async function polishDraft(req, res, next) {
   try {
-    await claimQuota(req.user)
+    // Before claimQuota, not after: an unconfigured key would otherwise charge
+    // both counters on every 503 and, after GLOBAL_DAILY_LIMIT of them, leave
+    // the feature dead for the rest of the day even once the key is set.
+    requireGemini()
+    const claim = await claimQuota(req.user)
     const { content, title, description } = req.validated.body
 
     const result = await runStructured({
       userId: req.user.id,
+      claim,
       system: POLISH_SYSTEM,
       userMessage: buildPolishUserMessage({ title, description, content }),
       responseSchema: POLISH_FORMAT,
@@ -320,11 +346,13 @@ export async function polishDraft(req, res, next) {
 
 export async function checkBeforeSubmit(req, res, next) {
   try {
-    await claimQuota(req.user)
+    requireGemini()
+    const claim = await claimQuota(req.user)
     const { content, title, artist, bestPick, description } = req.validated.body
 
     const result = await runStructured({
       userId: req.user.id,
+      claim,
       system: PRESUBMIT_SYSTEM,
       userMessage: buildPresubmitUserMessage({ title, artist, bestPick, description, content }),
       responseSchema: PRESUBMIT_FORMAT,
@@ -345,23 +373,33 @@ export async function checkBeforeSubmit(req, res, next) {
 
 export async function moderatePost(req, res, next) {
   try {
-    await claimQuota(req.user)
+    requireGemini()
     const { postId } = req.validated.body
 
+    // Lookup before claimQuota: charging for a post that doesn't exist spends
+    // a slot on a call that never reaches the model and never gets refunded,
+    // so repeatedly clicking "AI review" on a just-deleted post could drain
+    // the shared budget for the day.
     const post = await getPostById(postId)
     if (!post) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post not found')
     }
 
+    const claim = await claimQuota(req.user)
+
     const result = await runStructured({
       userId: req.user.id,
+      claim,
       system: MODERATE_SYSTEM,
       userMessage: buildModerateUserMessage({
         title: post.title,
         artist: post.artist,
         bestPick: post.bestPick,
         description: post.description,
-        content: post.content,
+        // Unlike the client-supplied paths, this text comes from a stored row,
+        // and posts.content has no length ceiling — so without this a single
+        // moderation call could ship hundreds of thousands of input tokens.
+        content: post.content.slice(0, AI_INPUT_MAX_CHARS),
       }),
       responseSchema: MODERATE_FORMAT,
       validator: moderateOutput,
