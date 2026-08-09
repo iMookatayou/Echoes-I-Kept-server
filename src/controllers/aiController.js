@@ -145,46 +145,50 @@ function requireGemini() {
   }
 }
 
-// Checks the shared site-wide budget before the caller's personal one —
-// no point spending a user's allowance on a call the shared pool won't allow
-// anyway. Returns which counters were actually incremented, so the transport
-// failure path knows exactly what to refund.
+// Charges the caller's personal allowance first, then the shared one.
+//
+// The order used to be the other way round, on the reasoning that there was no
+// point spending a user's allowance on a call the shared pool would refuse.
+// But whichever counter is charged first sits transiently over-committed for
+// the length of the second RPC, and it matters a great deal which one that is:
+// an over-quota member clicking repeatedly (the per-IP limiter allows 20 per
+// 5 minutes) would keep nudging the *shared* counter to its ceiling and back,
+// and any other user landing in one of those windows got told the whole site
+// was out of budget until tomorrow — a permanent-sounding message for
+// something that clears in milliseconds. Charging personal first confines that
+// transient to the one caller who is already over their limit anyway.
 async function claimQuota(user) {
-  const global = await consumeGlobalQuota(GLOBAL_DAILY_LIMIT)
-  if (!global.allowed) {
-    throw new HttpError(
-      429,
-      'AI_QUOTA_EXCEEDED',
-      'The writing assistant has reached its shared usage limit for today across the whole site. Please try again tomorrow.',
-    )
-  }
-
   const limit = user.role === 'admin' ? DAILY_LIMIT.admin : DAILY_LIMIT.member
-
-  let personal
-  try {
-    personal = await consumeQuota(user.id, limit)
-  } catch (error) {
-    // The global slot is already spent at this point. Without this the shared
-    // budget drains one slot per failure — a transient Supabase error or a
-    // migration that hasn't been pushed would quietly take the whole site's
-    // AI budget offline for the day while every caller just sees a 500.
-    await refundGlobalQuota(global.chargedDate).catch((refundError) => {
-      console.error('[ai] global quota refund failed', refundError)
-    })
-    throw error
-  }
-
+  const personal = await consumeQuota(user.id, limit)
   if (!personal.allowed) {
-    // Same reasoning — the global slot was spent reaching this check, and
-    // this request is being rejected before it does anything with it.
-    await refundGlobalQuota(global.chargedDate).catch((error) => {
-      console.error('[ai] global quota refund failed', error)
-    })
     throw new HttpError(
       429,
       'AI_QUOTA_EXCEEDED',
       `You have used all ${limit} writing assistant requests for today (${personal.used} used). Try again tomorrow.`,
+    )
+  }
+
+  let global
+  try {
+    global = await consumeGlobalQuota(GLOBAL_DAILY_LIMIT)
+  } catch (error) {
+    // The personal slot is already spent. Without this a transient Supabase
+    // error would silently eat the caller's daily allowance for a request
+    // that never reached the model.
+    await refundQuota(user.id, personal.chargedDate).catch((refundError) => {
+      console.error('[ai] user quota refund failed', refundError)
+    })
+    throw error
+  }
+
+  if (!global.allowed) {
+    await refundQuota(user.id, personal.chargedDate).catch((error) => {
+      console.error('[ai] user quota refund failed', error)
+    })
+    throw new HttpError(
+      429,
+      'AI_QUOTA_EXCEEDED',
+      'The writing assistant has reached its shared usage limit for today across the whole site. Please try again tomorrow.',
     )
   }
 
@@ -193,17 +197,28 @@ async function claimQuota(user) {
   return { globalDate: global.chargedDate, userDate: personal.chargedDate }
 }
 
-// Undoes both counters claimQuota() incremented, for a call that never
-// reached the model. Failures are logged and swallowed — the caller should
-// still see the original error, not a refund-plumbing one.
-async function refundBothQuotas(userId, claim) {
+// Undoes the counters claimQuota() incremented, for a call that never reached
+// the model. Failures are logged and swallowed — the caller should still see
+// the original error, not a refund-plumbing one.
+//
+// `keepGlobal` holds the shared slot even though the request failed. That's
+// for the one case where the failure is itself evidence the shared budget is
+// gone: a 429 from Google. Refunding there would decrement the counter every
+// time the provider rejects, so GLOBAL_DAILY_LIMIT could never accumulate and
+// the gate whose whole job is to refuse *before* Google does would never trip
+// — every request for the rest of the day would be forwarded to a provider
+// certain to reject it. The caller's personal slot is still returned; they
+// shouldn't pay for the site hitting a provider ceiling.
+async function refundBothQuotas(userId, claim, { keepGlobal = false } = {}) {
   await Promise.all([
     refundQuota(userId, claim?.userDate).catch((error) =>
       console.error('[ai] user quota refund failed', error),
     ),
-    refundGlobalQuota(claim?.globalDate).catch((error) =>
-      console.error('[ai] global quota refund failed', error),
-    ),
+    keepGlobal
+      ? Promise.resolve()
+      : refundGlobalQuota(claim?.globalDate).catch((error) =>
+          console.error('[ai] global quota refund failed', error),
+        ),
   ])
 }
 
@@ -245,16 +260,19 @@ async function runStructured({ userId, claim, system, userMessage, responseSchem
     // which would hand an attacker a channel for reading the system prompt.
     console.error('[ai] request failed', { status: error?.status, name: error?.name })
 
-    // The call never reached the model, so it never cost anything — hand
-    // back the slots claimQuota() reserved before this call.
-    await refundBothQuotas(userId, claim)
-
     // A 429 here means Google's own daily cap was hit despite our own
     // GLOBAL_DAILY_LIMIT gate — e.g. usage outside this app (manual testing
     // against the same API key) counted against the same shared pool.
+    const providerExhausted = error?.status === 429
+
+    // The call never reached the model, so it never cost anything — hand
+    // back the slots claimQuota() reserved. The shared slot is the exception
+    // when the provider itself is out: see refundBothQuotas.
+    await refundBothQuotas(userId, claim, { keepGlobal: providerExhausted })
+
     // Worth a distinct, honest message rather than "try again shortly",
     // which reads as a transient blip when it's really a same-day dead end.
-    if (error?.status === 429) {
+    if (providerExhausted) {
       throw new HttpError(
         429,
         'AI_QUOTA_EXCEEDED',
@@ -394,6 +412,18 @@ export async function moderatePost(req, res, next) {
 
     const claim = await claimQuota(req.user)
 
+    // Unlike the client-supplied paths, this text comes from a stored row, and
+    // posts.content has no length ceiling — so without a clamp a single
+    // moderation call could ship hundreds of thousands of input tokens. The
+    // marker matters as much as the clamp: cutting mid-sentence with no note
+    // lets the model report "the post is unfinished / cuts off" as a genuine
+    // concern, and the admin would see an authoritative verdict about a defect
+    // that only the truncation created.
+    const truncated = post.content.length > AI_INPUT_MAX_CHARS
+    const content = truncated
+      ? `${post.content.slice(0, AI_INPUT_MAX_CHARS)}\n\n[This post was cut off here for review length. Do not treat the abrupt ending as a flaw in the writing.]`
+      : post.content
+
     const result = await runStructured({
       userId: req.user.id,
       claim,
@@ -407,10 +437,7 @@ export async function moderatePost(req, res, next) {
         artist: clampField(post.artist),
         bestPick: clampField(post.bestPick),
         description: clampField(post.description, 2000),
-        // Unlike the client-supplied paths, this text comes from a stored row,
-        // and posts.content has no length ceiling — so without this a single
-        // moderation call could ship hundreds of thousands of input tokens.
-        content: post.content.slice(0, AI_INPUT_MAX_CHARS),
+        content,
       }),
       responseSchema: MODERATE_FORMAT,
       validator: moderateOutput,
@@ -422,6 +449,9 @@ export async function moderatePost(req, res, next) {
     // submission could approve itself.
     return res.json({
       postId,
+      // So the admin can tell "the model read the whole thing" from "the model
+      // read the first 20k characters of it".
+      truncated,
       recommendation: result.recommendation,
       concerns: result.concerns,
       suggestedRejectionReason:
