@@ -30,8 +30,8 @@ grant execute on function public.refund_global_ai_quota(date) to service_role;
 grant execute on function public.refund_ai_quota(uuid) to service_role;
 grant execute on function public.refund_global_ai_quota() to service_role;
 
--- The three pre-existing functions with the same exposure. Each takes a bare
--- user uuid, and real uuids are handed to anonymous callers already:
+-- The three pre-existing functions with the same exposure. The first two take
+-- a user uuid, and real uuids are handed to anonymous callers already:
 -- GET /api/posts/:postId/comments is public and returns comments[].userId.
 --
 --   increment_token_version      — bumps users.token_version, invalidating
@@ -40,8 +40,10 @@ grant execute on function public.refund_global_ai_quota() to service_role;
 --                                  member logged out indefinitely.
 --   increment_approved_posts_count — inflates a member's tier, lifting the
 --                                  anti-spam cap on concurrent pending posts.
---   increment_otp_attempts       — burns a victim's OTP guesses before they
---                                  ever enter one.
+--   increment_otp_attempts       — takes an email_otps.id, not a user id. No
+--                                  endpoint returns those, so this one is not
+--                                  externally enumerable; revoked for
+--                                  consistency rather than to close a hole.
 revoke all on function public.increment_token_version(uuid) from public, anon, authenticated;
 revoke all on function public.increment_approved_posts_count(uuid) from public, anon, authenticated;
 revoke all on function public.increment_otp_attempts(uuid) from public, anon, authenticated;
