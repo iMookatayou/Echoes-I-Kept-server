@@ -21,3 +21,14 @@ export const otpVerifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 })
+
+// Same caveat as the OTP limiters — per-IP and not shared across serverless
+// instances, so this is a burst backstop, not the quota. The authoritative
+// limit for AI calls is the per-user daily allowance enforced in the database
+// by consume_ai_quota, which an attacker can't sidestep by rotating IPs.
+export const aiLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
