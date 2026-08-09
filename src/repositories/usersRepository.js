@@ -235,6 +235,88 @@ export async function deactivateUser(id) {
   return Boolean(data)
 }
 
+export async function findUserIdByGoogleId(googleId) {
+  requireDatabase()
+  const { data, error } = await supabase
+    .from('users')
+    .select('id')
+    .eq('google_id', googleId)
+    .maybeSingle()
+
+  throwDatabaseError(error)
+  return data?.id || null
+}
+
+// Called when a Google sign-in's email matches an existing password account.
+// Google already proved mailbox ownership by issuing the token, which is the
+// same standard resetPasswordWithCode relies on — so this also marks the
+// email verified rather than requiring a separate confirmation step.
+export async function linkGoogleAccount(id, googleId) {
+  requireDatabase()
+  const { error } = await supabase
+    .from('users')
+    .update({ google_id: googleId, email_verified: true })
+    .eq('id', id)
+
+  throwDatabaseError(error)
+}
+
+// Same character set as usernameSchema's regex (letters, numbers, underscore)
+// — a Google-derived username still has to satisfy the same rule everywhere
+// else a username is validated.
+function sanitizeUsernameBase(email) {
+  const localPart = email.split('@')[0] || ''
+  const cleaned = localPart.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 90)
+  return cleaned || 'member'
+}
+
+// Best-effort uniqueness: checked up front rather than relying solely on the
+// DB's unique constraint, so a Google sign-in gets a clean auto-picked
+// username instead of a raw constraint-violation error. The insert this feeds
+// into still has the last word if two signups race on the same candidate —
+// the same accepted gap as signup's checkUniqueFields-then-insert.
+export async function generateUniqueUsername(email) {
+  requireDatabase()
+  const base = sanitizeUsernameBase(email)
+
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const candidate = attempt === 0 ? base : `${base}${Math.floor(1000 + Math.random() * 9000)}`
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('username', candidate)
+      .maybeSingle()
+    throwDatabaseError(error)
+    if (!data) return candidate
+  }
+
+  throw new HttpError(500, 'USERNAME_GENERATION_FAILED', 'Unable to generate a unique username')
+}
+
+// role is always 'user' — same rule signup enforces, Google sign-in isn't a
+// path to an admin account.
+export async function createGoogleUser({ googleId, email, username, firstName, lastName, profilePic }) {
+  requireDatabase()
+  const { data, error } = await supabase
+    .from('users')
+    .insert({
+      google_id: googleId,
+      email,
+      username,
+      first_name: firstName,
+      last_name: lastName || null,
+      password_hash: null,
+      role: 'user',
+      profile_pic: profilePic || null,
+      email_verified: true,
+    })
+    .select('id')
+    .single()
+
+  throwDatabaseError(error)
+  return data
+}
+
 export async function countActiveAdmins() {
   requireDatabase()
   const { count, error } = await supabase

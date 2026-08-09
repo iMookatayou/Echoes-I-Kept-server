@@ -64,3 +64,11 @@ export const resetPasswordWithCodeSchema = z.object({
   code: otpCodeSchema,
   newPassword: passwordSchema,
 })
+
+// The ID token itself carries everything about the user — Google already
+// verified the signature client-side; the server re-verifies signature,
+// audience, issuer and expiry before trusting any of it. Nothing else in the
+// body is needed or accepted.
+export const googleAuthSchema = z.object({
+  credential: z.string().min(1),
+})
