@@ -1,12 +1,20 @@
--- 202608090003 revoked EXECUTE from anon/authenticated but not from PUBLIC,
--- and Postgres grants EXECUTE to PUBLIC on every function at creation. anon is
--- a member of PUBLIC, so the privilege survived by that route.
+-- 202608090003 revoked EXECUTE from anon/authenticated but not PUBLIC. That
+-- looked like a hole, but checking the live database says otherwise: creating
+-- a pg_default_acl entry replaces the built-in default wholesale, PUBLIC grant
+-- included, so the postgres grantor already reads
+--   {postgres=X/postgres, service_role=X/postgres}
+-- and no function in public grants EXECUTE to PUBLIC, anon or authenticated.
+-- Nothing is currently exposed, and 0003 did more than it appeared to.
 --
--- Nothing anon-reachable was actually exposed: 202608090002 had already locked
--- down all nine callable functions, and the three it missed are `returns
--- trigger`, which PostgREST does not expose. The gap that matters is future
--- functions — without fixed default privileges, the next one is created
--- anon-callable unless someone remembers to revoke by hand.
+-- This migration is therefore an assertion, not a repair. Its value is on
+-- `db reset` and in new environments, where Supabase's bootstrap re-grants
+-- anon/authenticated before migrations run — it re-establishes the intended
+-- default privileges and fails loudly if the end state is ever wrong.
+--
+-- Deliberately scoped to the current role and postgres. The supabase_admin
+-- grantor entry does carry anon=X, but that is the platform's own and not ours
+-- to change; asserting over it would abort the transaction, leave this
+-- migration unrecorded, and make every later db push fail identically.
 
 -- ROUTINE, not FUNCTION: the FUNCTION syntax rejects procedures, so one added
 -- later would abort this on every db reset. Extension-owned functions are
