@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import {
   forgotPassword,
+  googleAuth,
   login,
   logout,
   me,
@@ -17,6 +18,7 @@ import { validateRequest } from '../middleware/validateRequest.js'
 import { otpRequestLimiter, otpVerifyLimiter } from '../middleware/rateLimit.js'
 import {
   forgotPasswordSchema,
+  googleAuthSchema,
   loginSchema,
   refreshTokenSchema,
   resendVerificationSchema,
@@ -31,6 +33,7 @@ const authRouter = Router()
 
 authRouter.post('/signup', otpRequestLimiter, validateRequest({ body: signupSchema }), signup)
 authRouter.post('/login', validateRequest({ body: loginSchema }), login)
+authRouter.post('/google', validateRequest({ body: googleAuthSchema }), googleAuth)
 authRouter.post('/refresh', validateRequest({ body: refreshTokenSchema }), refresh)
 authRouter.post('/logout', validateRequest({ body: refreshTokenSchema }), logout)
 

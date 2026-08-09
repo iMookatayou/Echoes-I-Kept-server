@@ -8,6 +8,7 @@ import { generateOtpCode, hashOtpCode, otpExpiresAt, verifyOtpCode } from '../ut
 import { sendOtpEmail } from '../utils/email.js'
 import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
+import { verifyGoogleIdToken } from '../googleAuthClient.js'
 
 const MAX_OTP_ATTEMPTS = 5
 const OTP_RESEND_COOLDOWN_MS = 60 * 1000
@@ -107,6 +108,17 @@ export async function login(req, res, next) {
     if (!row || !row.is_active) throw invalidCredentials()
     if (role && row.role !== role) throw invalidCredentials()
 
+    // A Google-only account has no password_hash to compare against — bcrypt
+    // throws on a non-string hash rather than just returning false, so this
+    // has to be checked before calling it, not left to fall through.
+    if (!row.password_hash) {
+      throw new HttpError(
+        400,
+        'PASSWORD_LOGIN_UNAVAILABLE',
+        'This account signs in with Google. Use the Google button instead.',
+      )
+    }
+
     const passwordMatches = await comparePassword(password, row.password_hash)
     if (!passwordMatches) throw invalidCredentials()
     if (!row.email_verified) {
@@ -119,6 +131,58 @@ export async function login(req, res, next) {
       tokenVersion: row.token_version,
     })
     const user = await usersRepository.getUserById(row.id)
+
+    return res.json({ data: user, accessToken, refreshToken })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+// No password, no OTP, no separate signup step: the ID token itself is proof
+// of a verified Google account, so this single endpoint covers first sign-in
+// (creates an account), a returning Google user (looks up by google_id), and
+// a Google sign-in on an email that already has a password account (links
+// it) — three branches of the same trusted-identity fact, not three features.
+export async function googleAuth(req, res, next) {
+  try {
+    const { credential } = req.validated.body
+    const payload = await verifyGoogleIdToken(credential)
+
+    if (!payload.email_verified) {
+      throw new HttpError(
+        403,
+        'GOOGLE_EMAIL_UNVERIFIED',
+        "Your Google account's email isn't verified",
+      )
+    }
+
+    let userId = await usersRepository.findUserIdByGoogleId(payload.sub)
+
+    if (!userId) {
+      const existing = await usersRepository.findUserForLogin(payload.email)
+      if (existing) {
+        if (!existing.is_active) throw invalidCredentials()
+        await usersRepository.linkGoogleAccount(existing.id, payload.sub)
+        userId = existing.id
+      } else {
+        const username = await usersRepository.generateUniqueUsername(payload.email)
+        const created = await usersRepository.createGoogleUser({
+          googleId: payload.sub,
+          email: payload.email,
+          username,
+          firstName: payload.given_name || payload.name?.split(' ')[0] || 'Member',
+          lastName: payload.family_name || null,
+          profilePic: payload.picture || null,
+        })
+        userId = created.id
+      }
+    }
+
+    const authState = await usersRepository.getAuthState(userId)
+    if (!authState || !authState.isActive) throw invalidCredentials()
+
+    const { accessToken, refreshToken } = await issueSession(authState)
+    const user = await usersRepository.getUserById(userId)
 
     return res.json({ data: user, accessToken, refreshToken })
   } catch (error) {
