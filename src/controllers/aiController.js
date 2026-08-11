@@ -503,6 +503,17 @@ export async function translatePost(req, res, next) {
       return res.json({ postId, targetLanguage, cached: true, ...cached })
     }
 
+    // Reaching here means generating a fresh translation, which spends a
+    // quota slot and costs money — unlike a cache hit above, that much
+    // requires being signed in even though the endpoint itself is public.
+    if (!req.user) {
+      throw new HttpError(
+        401,
+        'LOGIN_REQUIRED',
+        'Log in to translate this article — once translated, anyone can read it in this language for free.',
+      )
+    }
+
     requireGemini()
     const claim = await claimQuota(req.user)
 
