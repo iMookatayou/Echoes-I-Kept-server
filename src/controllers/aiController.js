@@ -7,6 +7,7 @@ import {
   refundGlobalQuota,
   refundQuota,
 } from '../repositories/aiUsageRepository.js'
+import { getCachedTranslation, saveTranslation } from '../repositories/postTranslationsRepository.js'
 import { getPostById } from '../repositories/postsRepository.js'
 import { AI_INPUT_MAX_CHARS } from '../schemas/aiSchema.js'
 import {
@@ -16,6 +17,8 @@ import {
   buildModerateUserMessage,
   buildPolishUserMessage,
   buildPresubmitUserMessage,
+  buildTranslateSystem,
+  buildTranslateUserMessage,
 } from '../utils/aiPrompts.js'
 import { HttpError } from '../utils/httpError.js'
 
@@ -108,6 +111,19 @@ const MODERATE_FORMAT = {
   required: ['recommendation', 'concerns', 'suggestedRejectionReason'],
 }
 
+const TRANSLATE_FORMAT = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING, description: 'The translated title, one line, no markdown.' },
+    description: {
+      type: Type.STRING,
+      description: 'The translated introduction, one line, no markdown.',
+    },
+    content: { type: Type.STRING, description: 'The translated content, in markdown.' },
+  },
+  required: ['title', 'description', 'content'],
+}
+
 const polishOutput = z.object({
   title: z.string(),
   description: z.string(),
@@ -126,6 +142,12 @@ const moderateOutput = z.object({
   recommendation: z.enum(['approve', 'review', 'reject']),
   concerns: z.array(z.string()),
   suggestedRejectionReason: z.string(),
+})
+
+const translateOutput = z.object({
+  title: z.string(),
+  description: z.string(),
+  content: z.string(),
 })
 
 // Bounds a stored field before it becomes prompt text. Nullable columns come
@@ -457,6 +479,59 @@ export async function moderatePost(req, res, next) {
       suggestedRejectionReason:
         result.recommendation === 'reject' ? result.suggestedRejectionReason : '',
     })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function translatePost(req, res, next) {
+  try {
+    const { postId, targetLanguage } = req.validated.body
+
+    const post = await getPostById(postId)
+    // Only published posts are ever shown to a reader — translating a
+    // pending/rejected one would leak content through a side channel that
+    // doesn't go through the normal optionalAuth visibility check.
+    if (!post || post.status !== 'published') {
+      throw new HttpError(404, 'POST_NOT_FOUND', 'Post not found')
+    }
+
+    // Checked before requireGemini/claimQuota: a cache hit costs nothing and
+    // shouldn't require the API key to be configured or spend a quota slot.
+    const cached = await getCachedTranslation(postId, targetLanguage)
+    if (cached) {
+      return res.json({ postId, targetLanguage, cached: true, ...cached })
+    }
+
+    requireGemini()
+    const claim = await claimQuota(req.user)
+
+    const truncated = post.content.length > AI_INPUT_MAX_CHARS
+    const content = truncated
+      ? `${post.content.slice(0, AI_INPUT_MAX_CHARS)}\n\n[Cut off here for length.]`
+      : post.content
+
+    const result = await runStructured({
+      userId: req.user.id,
+      claim,
+      system: buildTranslateSystem(targetLanguage),
+      userMessage: buildTranslateUserMessage({
+        title: clampField(post.title),
+        description: clampField(post.description, 2000),
+        content,
+      }),
+      responseSchema: TRANSLATE_FORMAT,
+      validator: translateOutput,
+      maxOutputTokens: 16000,
+    })
+
+    // Best-effort: a caching failure shouldn't turn a successful translation
+    // into an error response. The next reader just pays for another call.
+    await saveTranslation(postId, targetLanguage, result).catch((error) => {
+      console.error('[ai] translation cache write failed', error)
+    })
+
+    return res.json({ postId, targetLanguage, cached: false, ...result })
   } catch (error) {
     return next(error)
   }

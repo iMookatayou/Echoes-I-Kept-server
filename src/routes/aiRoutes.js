@@ -3,6 +3,7 @@ import {
   checkBeforeSubmit,
   moderatePost,
   polishDraft,
+  translatePost,
 } from '../controllers/aiController.js'
 import { aiLimiter } from '../middleware/rateLimit.js'
 import { requireAdmin } from '../middleware/requireAdmin.js'
@@ -12,6 +13,7 @@ import {
   moderateSchema,
   polishSchema,
   presubmitCheckSchema,
+  translateSchema,
 } from '../schemas/aiSchema.js'
 
 const aiRouter = Router()
@@ -35,6 +37,14 @@ aiRouter.post(
   requireAdmin,
   validateRequest({ body: moderateSchema }),
   moderatePost,
+)
+
+// Reader-facing, unlike the three endpoints above — any logged-in member can
+// call it on any published post, not just their own draft.
+aiRouter.post(
+  '/translate',
+  validateRequest({ body: translateSchema }),
+  translatePost,
 )
 
 export default aiRouter

@@ -47,3 +47,10 @@ export const presubmitCheckSchema = z.object({
 export const moderateSchema = z.object({
   postId: z.coerce.number().int().positive(),
 })
+
+// Reader-facing, unlike the schemas above — reads the stored post rather
+// than trusting client-supplied text, same reasoning as moderateSchema.
+export const translateSchema = z.object({
+  postId: z.coerce.number().int().positive(),
+  targetLanguage: z.enum(['en', 'th']),
+})

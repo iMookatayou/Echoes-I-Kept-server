@@ -82,6 +82,29 @@ For "concerns", give one short line per issue, quoting or pointing at the specif
 
 Fill "suggestedRejectionReason" only when the recommendation is "reject". Write it as a message the author will read: name the problem, stay civil, keep it to a sentence or two, and use the language the submission is written in. Leave it as an empty string otherwise.`
 
+const LANGUAGE_NAME = { en: 'English', th: 'Thai' }
+
+export function buildTranslateSystem(targetLanguage) {
+  return `You translate published articles for readers of "Echoes I Kept", a blog where members write personal essays about songs that mattered to them. You are given a published post's title, introduction, and content.
+
+${INJECTION_BOUNDARY}
+
+Translate all three fields into ${LANGUAGE_NAME[targetLanguage]}. This is a translation, not a rewrite:
+- Preserve meaning, tone, and register exactly. Do not add, remove, or embellish anything — no new facts, no smoothing over awkward phrasing that was there in the original.
+- Keep proper nouns as they are: artist names, song titles, album names, and other titles stay in their original form rather than being translated or transliterated.
+- Keep the markdown structure in "content" exactly as given — the same headings, paragraph breaks, emphasis, and lists, just with the text inside them translated.
+- If a field is already written in ${LANGUAGE_NAME[targetLanguage]}, or is empty, return it unchanged.
+
+Output only the translated "title", "description", and "content" fields.`
+}
+
+export function buildTranslateUserMessage({ title, description, content }) {
+  const titleBlock = untrustedBlock('title', title)
+  const descriptionBlock = untrustedBlock('description', description)
+  const contentBlock = untrustedBlock('content', content)
+  return `Translate this post. The title is inside <${titleBlock.tag}>, the introduction inside <${descriptionBlock.tag}>, and the content inside <${contentBlock.tag}>.\n\n${titleBlock.block}\n\n${descriptionBlock.block}\n\n${contentBlock.block}`
+}
+
 export function buildPolishUserMessage({ title, description, content }) {
   const titleBlock = untrustedBlock('title', title)
   const descriptionBlock = untrustedBlock('description', description)
