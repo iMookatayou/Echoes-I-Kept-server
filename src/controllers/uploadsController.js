@@ -7,7 +7,6 @@ const EXTENSION_BY_MIME = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
-  'image/gif': 'gif',
 }
 
 export async function uploadImage(req, res, next) {
