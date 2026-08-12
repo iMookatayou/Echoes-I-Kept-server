@@ -86,10 +86,10 @@ export async function signup(req, res, next) {
       emailVerified: false,
     })
 
-    // Best-effort: the account is already created at this point, so a
-    // Resend outage must not 502 the request and strand it (can't sign up
-    // again — the email is now taken). The user can always recover via
-    // resend-verification-code once email delivery is working again.
+    // Best-effort: the account is already created at this point, so an
+    // email-sending outage must not 502 the request and strand it (can't
+    // sign up again — the email is now taken). The user can always recover
+    // via resend-verification-code once email delivery is working again.
     try {
       const { code } = await issueOtpCode({ userId: user.id, purpose: 'signup_verify' })
       await sendOtpEmail({ to: email, code })
