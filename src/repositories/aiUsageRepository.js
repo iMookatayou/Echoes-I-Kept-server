@@ -7,11 +7,12 @@ import { requireDatabase, throwDatabaseError } from '../utils/dbErrors.js'
 // the date the row was actually written against; pass it back to refundQuota
 // so a refund that lands after UTC midnight still targets the row that was
 // charged rather than the new day's.
-export async function consumeQuota(userId, dailyLimit) {
+export async function consumeQuota(userId, dailyLimit, category) {
   requireDatabase()
   const { data, error } = await supabase.rpc('consume_ai_quota', {
     target_user_id: userId,
     daily_limit: dailyLimit,
+    target_category: category,
   })
 
   throwDatabaseError(error)
@@ -31,13 +32,14 @@ export async function consumeQuota(userId, dailyLimit) {
 
 // Hands back a slot claimed by consumeQuota() when the call it was reserved
 // for never reached the model — a transport failure, not a real attempt.
-export async function refundQuota(userId, chargedDate) {
+export async function refundQuota(userId, chargedDate, category) {
   requireDatabase()
   // The key is omitted rather than sent as null when the date is unknown —
-  // that's what selects the one-arg wrapper, which defaults to current_date.
+  // that's what selects the one-arg wrapper, which defaults to current_date
+  // and the 'writing_assist' category.
   const { error } = await supabase.rpc('refund_ai_quota', {
     target_user_id: userId,
-    ...(chargedDate ? { target_date: chargedDate } : {}),
+    ...(chargedDate ? { target_date: chargedDate, target_category: category } : {}),
   })
   throwDatabaseError(error)
 }

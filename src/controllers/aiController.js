@@ -7,6 +7,7 @@ import {
   refundGlobalQuota,
   refundQuota,
 } from '../repositories/aiUsageRepository.js'
+import { getCachedTranslation, saveTranslation } from '../repositories/postTranslationsRepository.js'
 import { getPostById } from '../repositories/postsRepository.js'
 import { AI_INPUT_MAX_CHARS } from '../schemas/aiSchema.js'
 import {
@@ -16,6 +17,8 @@ import {
   buildModerateUserMessage,
   buildPolishUserMessage,
   buildPresubmitUserMessage,
+  buildTranslateSystem,
+  buildTranslateUserMessage,
 } from '../utils/aiPrompts.js'
 import { HttpError } from '../utils/httpError.js'
 
@@ -36,7 +39,21 @@ import { HttpError } from '../utils/httpError.js'
 // Re-tune both once the real number is confirmed at
 // https://aistudio.google.com/rate-limit for the account's actual tier.
 const GLOBAL_DAILY_LIMIT = 15
-const DAILY_LIMIT = { member: 3, admin: 8 }
+
+// Personal limits are per-category (see the 202608120003 migration) — a
+// reader translating several articles no longer eats into the budget an
+// author needs for polish/presubmit-check on their own draft, or vice versa.
+// Translation gets a higher personal ceiling than the writing tools: unlike
+// polish/presubmit (paid every single call), a translate call that isn't a
+// cache hit is paid once and then read for free by every future visitor, so
+// spending more of a reader's personal quota on it is a better trade.
+// GLOBAL_DAILY_LIMIT still applies across every category combined — it
+// models Google's real per-project ceiling, which doesn't care what this
+// app calls the request.
+const DAILY_LIMIT = {
+  writing_assist: { member: 3, admin: 8 },
+  translation: { member: 5, admin: 10 },
+}
 
 // Schemas are written for Gemini's OpenAPI-subset Schema type (Type enum,
 // not JSON Schema's bare "string"/"object" strings), and constraining the
@@ -108,6 +125,19 @@ const MODERATE_FORMAT = {
   required: ['recommendation', 'concerns', 'suggestedRejectionReason'],
 }
 
+const TRANSLATE_FORMAT = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING, description: 'The translated title, one line, no markdown.' },
+    description: {
+      type: Type.STRING,
+      description: 'The translated introduction, one line, no markdown.',
+    },
+    content: { type: Type.STRING, description: 'The translated content, in markdown.' },
+  },
+  required: ['title', 'description', 'content'],
+}
+
 const polishOutput = z.object({
   title: z.string(),
   description: z.string(),
@@ -126,6 +156,12 @@ const moderateOutput = z.object({
   recommendation: z.enum(['approve', 'review', 'reject']),
   concerns: z.array(z.string()),
   suggestedRejectionReason: z.string(),
+})
+
+const translateOutput = z.object({
+  title: z.string(),
+  description: z.string(),
+  content: z.string(),
 })
 
 // Bounds a stored field before it becomes prompt text. Nullable columns come
@@ -157,14 +193,15 @@ function requireGemini() {
 // was out of budget until tomorrow — a permanent-sounding message for
 // something that clears in milliseconds. Charging personal first confines that
 // transient to the one caller who is already over their limit anyway.
-async function claimQuota(user) {
-  const limit = user.role === 'admin' ? DAILY_LIMIT.admin : DAILY_LIMIT.member
-  const personal = await consumeQuota(user.id, limit)
+async function claimQuota(user, category) {
+  const limit = DAILY_LIMIT[category][user.role === 'admin' ? 'admin' : 'member']
+  const personal = await consumeQuota(user.id, limit, category)
   if (!personal.allowed) {
+    const label = category === 'translation' ? 'translation' : 'writing assistant'
     throw new HttpError(
       429,
       'AI_QUOTA_EXCEEDED',
-      `You have used all ${limit} writing assistant requests for today (${personal.used} used). Try again tomorrow.`,
+      `You have used all ${limit} ${label} requests for today (${personal.used} used). Try again tomorrow.`,
     )
   }
 
@@ -175,20 +212,20 @@ async function claimQuota(user) {
     // The personal slot is already spent. Without this a transient Supabase
     // error would silently eat the caller's daily allowance for a request
     // that never reached the model.
-    await refundQuota(user.id, personal.chargedDate).catch((refundError) => {
+    await refundQuota(user.id, personal.chargedDate, category).catch((refundError) => {
       console.error('[ai] user quota refund failed', refundError)
     })
     throw error
   }
 
   if (!global.allowed) {
-    await refundQuota(user.id, personal.chargedDate).catch((error) => {
+    await refundQuota(user.id, personal.chargedDate, category).catch((error) => {
       console.error('[ai] user quota refund failed', error)
     })
     throw new HttpError(
       429,
       'AI_QUOTA_EXCEEDED',
-      'The writing assistant has reached its shared usage limit for today across the whole site. Please try again tomorrow.',
+      'The AI assistant has reached its shared usage limit for today across the whole site. Please try again tomorrow.',
     )
   }
 
@@ -209,9 +246,9 @@ async function claimQuota(user) {
 // — every request for the rest of the day would be forwarded to a provider
 // certain to reject it. The caller's personal slot is still returned; they
 // shouldn't pay for the site hitting a provider ceiling.
-async function refundBothQuotas(userId, claim, { keepGlobal = false } = {}) {
+async function refundBothQuotas(userId, claim, category, { keepGlobal = false } = {}) {
   await Promise.all([
-    refundQuota(userId, claim?.userDate).catch((error) =>
+    refundQuota(userId, claim?.userDate, category).catch((error) =>
       console.error('[ai] user quota refund failed', error),
     ),
     keepGlobal
@@ -232,7 +269,7 @@ const REFUSAL_FINISH_REASONS = new Set([
   'RECITATION',
 ])
 
-async function runStructured({ userId, claim, system, userMessage, responseSchema, validator, maxOutputTokens }) {
+async function runStructured({ userId, claim, category, system, userMessage, responseSchema, validator, maxOutputTokens }) {
   let response
   try {
     response = await gemini.models.generateContent({
@@ -268,7 +305,7 @@ async function runStructured({ userId, claim, system, userMessage, responseSchem
     // The call never reached the model, so it never cost anything — hand
     // back the slots claimQuota() reserved. The shared slot is the exception
     // when the provider itself is out: see refundBothQuotas.
-    await refundBothQuotas(userId, claim, { keepGlobal: providerExhausted })
+    await refundBothQuotas(userId, claim, category, { keepGlobal: providerExhausted })
 
     // Worth a distinct, honest message rather than "try again shortly",
     // which reads as a transient blip when it's really a same-day dead end.
@@ -345,12 +382,13 @@ export async function polishDraft(req, res, next) {
     // both counters on every 503 and, after GLOBAL_DAILY_LIMIT of them, leave
     // the feature dead for the rest of the day even once the key is set.
     requireGemini()
-    const claim = await claimQuota(req.user)
+    const claim = await claimQuota(req.user, 'writing_assist')
     const { content, title, description } = req.validated.body
 
     const result = await runStructured({
       userId: req.user.id,
       claim,
+      category: 'writing_assist',
       system: POLISH_SYSTEM,
       userMessage: buildPolishUserMessage({ title, description, content }),
       responseSchema: POLISH_FORMAT,
@@ -372,12 +410,13 @@ export async function polishDraft(req, res, next) {
 export async function checkBeforeSubmit(req, res, next) {
   try {
     requireGemini()
-    const claim = await claimQuota(req.user)
+    const claim = await claimQuota(req.user, 'writing_assist')
     const { content, title, artist, bestPick, description } = req.validated.body
 
     const result = await runStructured({
       userId: req.user.id,
       claim,
+      category: 'writing_assist',
       system: PRESUBMIT_SYSTEM,
       userMessage: buildPresubmitUserMessage({ title, artist, bestPick, description, content }),
       responseSchema: PRESUBMIT_FORMAT,
@@ -410,7 +449,7 @@ export async function moderatePost(req, res, next) {
       throw new HttpError(404, 'POST_NOT_FOUND', 'Post not found')
     }
 
-    const claim = await claimQuota(req.user)
+    const claim = await claimQuota(req.user, 'writing_assist')
 
     // Unlike the client-supplied paths, this text comes from a stored row, and
     // posts.content has no length ceiling — so without a clamp a single
@@ -427,6 +466,7 @@ export async function moderatePost(req, res, next) {
     const result = await runStructured({
       userId: req.user.id,
       claim,
+      category: 'writing_assist',
       system: MODERATE_SYSTEM,
       userMessage: buildModerateUserMessage({
         // Every field is clamped, not just content. postSchema now caps these
@@ -457,6 +497,71 @@ export async function moderatePost(req, res, next) {
       suggestedRejectionReason:
         result.recommendation === 'reject' ? result.suggestedRejectionReason : '',
     })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function translatePost(req, res, next) {
+  try {
+    const { postId, targetLanguage } = req.validated.body
+
+    const post = await getPostById(postId)
+    // Only published posts are ever shown to a reader — translating a
+    // pending/rejected one would leak content through a side channel that
+    // doesn't go through the normal optionalAuth visibility check.
+    if (!post || post.status !== 'published') {
+      throw new HttpError(404, 'POST_NOT_FOUND', 'Post not found')
+    }
+
+    // Checked before requireGemini/claimQuota: a cache hit costs nothing and
+    // shouldn't require the API key to be configured or spend a quota slot.
+    const cached = await getCachedTranslation(postId, targetLanguage)
+    if (cached) {
+      return res.json({ postId, targetLanguage, cached: true, ...cached })
+    }
+
+    // Reaching here means generating a fresh translation, which spends a
+    // quota slot and costs money — unlike a cache hit above, that much
+    // requires being signed in even though the endpoint itself is public.
+    if (!req.user) {
+      throw new HttpError(
+        401,
+        'LOGIN_REQUIRED',
+        'Log in to translate this article — once translated, anyone can read it in this language for free.',
+      )
+    }
+
+    requireGemini()
+    const claim = await claimQuota(req.user, 'translation')
+
+    const truncated = post.content.length > AI_INPUT_MAX_CHARS
+    const content = truncated
+      ? `${post.content.slice(0, AI_INPUT_MAX_CHARS)}\n\n[Cut off here for length.]`
+      : post.content
+
+    const result = await runStructured({
+      userId: req.user.id,
+      claim,
+      category: 'translation',
+      system: buildTranslateSystem(targetLanguage),
+      userMessage: buildTranslateUserMessage({
+        title: clampField(post.title),
+        description: clampField(post.description, 2000),
+        content,
+      }),
+      responseSchema: TRANSLATE_FORMAT,
+      validator: translateOutput,
+      maxOutputTokens: 16000,
+    })
+
+    // Best-effort: a caching failure shouldn't turn a successful translation
+    // into an error response. The next reader just pays for another call.
+    await saveTranslation(postId, targetLanguage, result).catch((error) => {
+      console.error('[ai] translation cache write failed', error)
+    })
+
+    return res.json({ postId, targetLanguage, cached: false, ...result })
   } catch (error) {
     return next(error)
   }
