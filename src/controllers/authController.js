@@ -1,11 +1,13 @@
 import * as usersRepository from '../repositories/usersRepository.js'
 import * as refreshTokensRepository from '../repositories/refreshTokensRepository.js'
 import * as emailOtpsRepository from '../repositories/emailOtpsRepository.js'
+import * as passwordResetTokensRepository from '../repositories/passwordResetTokensRepository.js'
 import { hashPassword, comparePassword } from '../utils/passwordHash.js'
 import { signAccessToken } from '../utils/jwt.js'
 import { generateRefreshToken, hashToken } from '../utils/refreshToken.js'
 import { generateOtpCode, hashOtpCode, otpExpiresAt, verifyOtpCode } from '../utils/otp.js'
-import { sendOtpEmail } from '../utils/email.js'
+import { generatePasswordResetToken, hashResetToken } from '../utils/passwordResetToken.js'
+import { sendOtpEmail, sendPasswordResetEmail } from '../utils/email.js'
 import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
 import { verifyGoogleIdToken } from '../googleAuthClient.js'
@@ -52,8 +54,9 @@ async function issueOtpCode({ userId, purpose }) {
 
 // Verifies a submitted code against the latest active OTP for a user+purpose,
 // bumping the attempt counter on a wrong guess and consuming it on success.
-// Shared by verifyEmail/resetPasswordWithCode so both apply the exact same
-// lockout/expiry/one-time-use rules.
+// Only signup_verify uses this now — password reset moved to a link token
+// (see resetPasswordWithToken), but this stays purpose-generic in case
+// another OTP-based flow needs it later.
 async function consumeOtpCode({ userId, purpose, code }) {
   const otpRow = await emailOtpsRepository.findActiveByUserAndPurpose(userId, purpose)
   if (!otpRow || otpRow.attempt_count >= MAX_OTP_ATTEMPTS) throw invalidOrExpiredCode()
@@ -89,7 +92,7 @@ export async function signup(req, res, next) {
     // resend-verification-code once email delivery is working again.
     try {
       const { code } = await issueOtpCode({ userId: user.id, purpose: 'signup_verify' })
-      await sendOtpEmail({ to: email, code, purpose: 'signup_verify' })
+      await sendOtpEmail({ to: email, code })
     } catch {
       // swallow — see comment above
     }
@@ -326,7 +329,7 @@ export async function resendVerificationCode(req, res, next) {
     if (row && row.is_active && !row.email_verified) {
       try {
         const { code, throttled } = await issueOtpCode({ userId: row.id, purpose: 'signup_verify' })
-        if (!throttled) await sendOtpEmail({ to: email, code, purpose: 'signup_verify' })
+        if (!throttled) await sendOtpEmail({ to: email, code })
       } catch {
         // swallow — response must stay identical either way
       }
@@ -338,7 +341,11 @@ export async function resendVerificationCode(req, res, next) {
   }
 }
 
-// Enumeration-safe: same reasoning as resendVerificationCode above.
+// Enumeration-safe: same reasoning as resendVerificationCode above. Issues a
+// single-use, time-limited link token (see passwordResetToken.js) rather
+// than a 6-digit code — OWASP's recommended shape for "reset by email",
+// since it doesn't require the user to hand-copy anything and can't be
+// brute-forced the way a short code theoretically could.
 export async function forgotPassword(req, res, next) {
   try {
     const { email } = req.validated.body
@@ -346,8 +353,12 @@ export async function forgotPassword(req, res, next) {
 
     if (row && row.is_active) {
       try {
-        const { code, throttled } = await issueOtpCode({ userId: row.id, purpose: 'password_reset' })
-        if (!throttled) await sendOtpEmail({ to: email, code, purpose: 'password_reset' })
+        // Invalidate first: an older, still-unused link from a previous
+        // request shouldn't keep working once a newer one has been sent.
+        await passwordResetTokensRepository.invalidateActiveForUser(row.id)
+        const { token, hash, expiresAt } = generatePasswordResetToken()
+        await passwordResetTokensRepository.create({ userId: row.id, tokenHash: hash, expiresAt })
+        await sendPasswordResetEmail({ to: email, token })
       } catch {
         // swallow — response must stay identical either way
       }
@@ -359,24 +370,40 @@ export async function forgotPassword(req, res, next) {
   }
 }
 
-export async function resetPasswordWithCode(req, res, next) {
-  try {
-    const { email, code, newPassword } = req.validated.body
-    const row = await usersRepository.findUserForLogin(email)
-    if (!row || !row.is_active) throw invalidOrExpiredCode()
+function invalidOrExpiredToken() {
+  return new HttpError(
+    400,
+    'INVALID_OR_EXPIRED_TOKEN',
+    'This reset link is invalid or has expired. Request a new one.',
+  )
+}
 
-    await consumeOtpCode({ userId: row.id, purpose: 'password_reset', code })
+// The GET-then-POST split matters here: clicking the email link only ever
+// renders a form (client-side routing, no server round-trip) — the token is
+// read from the URL and submitted here, on deliberate user action, along
+// with the new password. Nothing about receiving or opening the email can
+// consume the single use on its own, which is what protects against email
+// scanners/prefetchers silently burning the link before the real recipient
+// clicks it.
+export async function resetPasswordWithToken(req, res, next) {
+  try {
+    const { token, newPassword } = req.validated.body
+    const hash = hashResetToken(token)
+    const tokenRow = await passwordResetTokensRepository.findActiveByHash(hash)
+    if (!tokenRow) throw invalidOrExpiredToken()
+
+    await passwordResetTokensRepository.markUsed(tokenRow.id)
 
     const passwordHash = await hashPassword(newPassword)
-    const user = await usersRepository.updateUserPassword(row.id, passwordHash)
-    await refreshTokensRepository.revokeAllForUser(row.id)
-    // Proving mailbox control via a reset code is equally valid proof of
+    const user = await usersRepository.updateUserPassword(tokenRow.user_id, passwordHash)
+    await refreshTokensRepository.revokeAllForUser(tokenRow.user_id)
+    // Proving mailbox control via this link is equally valid proof of
     // ownership as the signup code — mark verified too, so an unverified
     // account someone else typo'd into existence can be reclaimed and
     // logged into in one step instead of dead-ending at EMAIL_NOT_VERIFIED.
-    if (!row.email_verified) await usersRepository.markEmailVerified(row.id)
+    if (!user.emailVerified) await usersRepository.markEmailVerified(tokenRow.user_id)
 
-    const authState = await usersRepository.getAuthState(row.id)
+    const authState = await usersRepository.getAuthState(tokenRow.user_id)
     const { accessToken, refreshToken } = await issueSession(authState)
 
     return res.json({ data: user, accessToken, refreshToken })
