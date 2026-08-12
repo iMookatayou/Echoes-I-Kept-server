@@ -139,10 +139,10 @@ export async function login(req, res, next) {
 }
 
 // No password, no OTP, no separate signup step: the ID token itself is proof
-// of a verified Google account, so this single endpoint covers first sign-in
-// (creates an account), a returning Google user (looks up by google_id), and
-// a Google sign-in on an email that already has a password account (links
-// it) — three branches of the same trusted-identity fact, not three features.
+// of a verified Google account, so this single endpoint covers both a first
+// Google sign-in (creates an account) and a returning one (looks up by
+// google_id). An email that already has a password account is rejected
+// rather than linked — see the comment below.
 export async function googleAuth(req, res, next) {
   try {
     const { credential } = req.validated.body
@@ -159,11 +159,17 @@ export async function googleAuth(req, res, next) {
     let userId = await usersRepository.findUserIdByGoogleId(payload.sub)
 
     if (!userId) {
+      // Deliberately not auto-linked: an account that signed up with a
+      // password owns that identity, and a matching Google email alone
+      // doesn't get to walk in and log in as them. They keep using their
+      // password; Google sign-in stays for accounts that started with it.
       const existing = await usersRepository.findUserForLogin(payload.email)
       if (existing) {
-        if (!existing.is_active) throw invalidCredentials()
-        await usersRepository.linkGoogleAccount(existing.id, payload.sub)
-        userId = existing.id
+        throw new HttpError(
+          409,
+          'EMAIL_REGISTERED_WITH_PASSWORD',
+          'This email is already registered with a password. Log in with your email and password instead.',
+        )
       } else {
         const username = await usersRepository.generateUniqueUsername(payload.email)
         const created = await usersRepository.createGoogleUser({

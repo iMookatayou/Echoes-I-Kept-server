@@ -247,20 +247,6 @@ export async function findUserIdByGoogleId(googleId) {
   return data?.id || null
 }
 
-// Called when a Google sign-in's email matches an existing password account.
-// Google already proved mailbox ownership by issuing the token, which is the
-// same standard resetPasswordWithCode relies on — so this also marks the
-// email verified rather than requiring a separate confirmation step.
-export async function linkGoogleAccount(id, googleId) {
-  requireDatabase()
-  const { error } = await supabase
-    .from('users')
-    .update({ google_id: googleId, email_verified: true })
-    .eq('id', id)
-
-  throwDatabaseError(error)
-}
-
 // Same character set as usernameSchema's regex (letters, numbers, underscore)
 // — a Google-derived username still has to satisfy the same rule everywhere
 // else a username is validated.
