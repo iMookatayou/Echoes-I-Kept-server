@@ -31,9 +31,15 @@ function requireEmailConfigured() {
   }
 }
 
+// A bare address as "from" shows the sender's personal Gmail address with no
+// name attached in most email clients — this pairs it with the app's name,
+// so recipients see "Echoes I Kept" the way they'd see any other app's
+// sender name, not a stranger's personal email.
+const FROM_ADDRESS = `"Echoes I Kept" <${GMAIL_USER}>`
+
 async function send({ to, subject, text, html }) {
   try {
-    await transporter.sendMail({ from: GMAIL_USER, to, subject, text, html })
+    await transporter.sendMail({ from: FROM_ADDRESS, to, subject, text, html })
   } catch (error) {
     console.error('[email] send failed', { code: error?.code, message: error?.message })
     throw new HttpError(502, 'EMAIL_SEND_FAILED', 'Failed to send email')
