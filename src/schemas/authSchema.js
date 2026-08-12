@@ -59,9 +59,11 @@ export const forgotPasswordSchema = z.object({
   email: z.string().trim().email(),
 })
 
-export const resetPasswordWithCodeSchema = z.object({
-  email: z.string().trim().email(),
-  code: otpCodeSchema,
+// The token itself is the credential (a random 32-byte value, hex-encoded —
+// see passwordResetToken.js) — no email needed alongside it, unlike the old
+// code-based flow where the code alone was too short to trust on its own.
+export const resetPasswordWithTokenSchema = z.object({
+  token: z.string().trim().min(32),
   newPassword: passwordSchema,
 })
 

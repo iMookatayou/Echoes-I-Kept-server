@@ -8,7 +8,7 @@ import {
   refresh,
   resendVerificationCode,
   resetPassword,
-  resetPasswordWithCode,
+  resetPasswordWithToken,
   signup,
   updateProfile,
   verifyEmail,
@@ -23,7 +23,7 @@ import {
   refreshTokenSchema,
   resendVerificationSchema,
   resetPasswordSchema,
-  resetPasswordWithCodeSchema,
+  resetPasswordWithTokenSchema,
   signupSchema,
   updateProfileSchema,
   verifyEmailSchema,
@@ -56,10 +56,10 @@ authRouter.post(
   forgotPassword,
 )
 authRouter.post(
-  '/reset-password-with-code',
+  '/reset-password',
   otpVerifyLimiter,
-  validateRequest({ body: resetPasswordWithCodeSchema }),
-  resetPasswordWithCode,
+  validateRequest({ body: resetPasswordWithTokenSchema }),
+  resetPasswordWithToken,
 )
 
 authRouter.get('/me', requireAuth, me)

@@ -249,7 +249,7 @@ export async function findUserIdByGoogleId(googleId) {
 
 // Called when a Google sign-in's email matches an existing password account.
 // Google already proved mailbox ownership by issuing the token, which is the
-// same standard resetPasswordWithCode relies on — so this also marks the
+// same standard resetPasswordWithToken relies on — so this also marks the
 // email verified rather than requiring a separate confirmation step.
 export async function linkGoogleAccount(id, googleId) {
   requireDatabase()
