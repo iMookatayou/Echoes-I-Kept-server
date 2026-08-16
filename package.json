@@ -12,21 +12,27 @@
     "db:reset": "supabase db reset",
     "db:env": "supabase status -o env > .env.local",
     "db:push": "supabase db push",
-    "test:posts": "node scripts/smokePosts.js"
+    "test:posts": "node scripts/smokePosts.js",
+    "seed:engagement": "node scripts/seedEngagementData.js",
+    "seed:admin": "node scripts/seedAdminUser.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@google/genai": "^2.16.0",
     "@supabase/supabase-js": "^2.108.2",
     "bcryptjs": "^3.0.3",
-    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "google-auth-library": "^10.9.1",
     "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.11.0",
     "multer": "^2.2.0",
+    "nodemailer": "^9.0.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

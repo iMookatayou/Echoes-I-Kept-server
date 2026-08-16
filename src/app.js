@@ -1,9 +1,11 @@
-import cookieParser from 'cookie-parser'
 import cors from 'cors'
 import express from 'express'
+import morgan from 'morgan'
+import aiRouter from './routes/aiRoutes.js'
 import authRouter from './routes/authRoutes.js'
 import categoriesRouter from './routes/categoriesRoutes.js'
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
+import notificationRouter from './routes/notificationRoutes.js'
 import postsRouter from './routes/postsRoutes.js'
 import uploadRouter from './routes/uploadRoutes.js'
 import usersRouter from './routes/usersRoutes.js'
@@ -12,9 +14,15 @@ import { hasSupabaseConfig, supabase } from './supabaseClient.js'
 const app = express()
 const port = process.env.PORT || 4000
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173', credentials: true }))
+// Deployed behind a single reverse proxy (Vercel) — without this,
+// express-rate-limit sees every request as coming from the same upstream
+// IP (or throws on X-Forwarded-For validation), making the OTP endpoint
+// limiters useless.
+app.set('trust proxy', 1)
+
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' }))
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
 app.use(express.json({ limit: '1mb' }))
-app.use(cookieParser())
 
 app.get('/', (_req, res) => {
   res.json({
@@ -28,6 +36,8 @@ app.get('/', (_req, res) => {
       '/api/categories',
       '/api/auth',
       '/api/users',
+      '/api/notifications',
+      '/api/ai',
     ],
   })
 })
@@ -63,6 +73,8 @@ app.use('/api/uploads', uploadRouter)
 app.use('/api/categories', categoriesRouter)
 app.use('/api/auth', authRouter)
 app.use('/api/users', usersRouter)
+app.use('/api/notifications', notificationRouter)
+app.use('/api/ai', aiRouter)
 app.use(notFoundHandler)
 app.use(errorHandler)
 

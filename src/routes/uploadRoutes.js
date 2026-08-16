@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { uploadImage } from '../controllers/uploadsController.js'
-import { localMutationOnly } from '../middleware/localMutationOnly.js'
+import { requireAuth } from '../middleware/requireAuth.js'
 import { HttpError } from '../utils/httpError.js'
 
-const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+// No GIF — animated GIFs run far larger than a still jpg/png/webp at the
+// same visual size, and post images don't need animation.
+const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -20,6 +22,6 @@ const upload = multer({
 
 const uploadRouter = Router()
 
-uploadRouter.post('/', localMutationOnly, upload.single('image'), uploadImage)
+uploadRouter.post('/', requireAuth, upload.single('image'), uploadImage)
 
 export default uploadRouter

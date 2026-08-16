@@ -1,42 +1,72 @@
 import * as usersRepository from '../repositories/usersRepository.js'
 import * as refreshTokensRepository from '../repositories/refreshTokensRepository.js'
+import * as emailOtpsRepository from '../repositories/emailOtpsRepository.js'
+import * as passwordResetTokensRepository from '../repositories/passwordResetTokensRepository.js'
 import { hashPassword, comparePassword } from '../utils/passwordHash.js'
 import { signAccessToken } from '../utils/jwt.js'
 import { generateRefreshToken, hashToken } from '../utils/refreshToken.js'
+import { generateOtpCode, hashOtpCode, otpExpiresAt, verifyOtpCode } from '../utils/otp.js'
+import { generatePasswordResetToken, hashResetToken } from '../utils/passwordResetToken.js'
+import { sendOtpEmail, sendPasswordResetEmail } from '../utils/email.js'
+import { defaultAvatarUrl } from '../utils/defaultAvatar.js'
 import { HttpError } from '../utils/httpError.js'
+import { verifyGoogleIdToken } from '../googleAuthClient.js'
 
-const COOKIE_SECURE = process.env.NODE_ENV === 'production'
+const MAX_OTP_ATTEMPTS = 5
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000
 
-function setAuthCookies(res, { accessToken, refreshToken, refreshTokenExpiresAt }) {
-  res.cookie('access_token', accessToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
-    path: '/',
-  })
-  res.cookie('refresh_token', refreshToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: COOKIE_SECURE,
-    path: '/api/auth/refresh',
-    expires: refreshTokenExpiresAt,
-  })
-}
-
-function clearAuthCookies(res) {
-  res.clearCookie('access_token', { path: '/' })
-  res.clearCookie('refresh_token', { path: '/api/auth/refresh' })
-}
-
-async function issueSession(res, { id, role, tokenVersion }) {
+async function issueSession({ id, role, tokenVersion }) {
   const accessToken = signAccessToken({ sub: id, role, tokenVersion })
   const { token: refreshToken, hash, expiresAt } = generateRefreshToken()
   await refreshTokensRepository.create({ userId: id, tokenHash: hash, expiresAt })
-  setAuthCookies(res, { accessToken, refreshToken, refreshTokenExpiresAt: expiresAt })
+  return { accessToken, refreshToken }
 }
 
 function invalidCredentials() {
   return new HttpError(401, 'INVALID_CREDENTIALS', 'Invalid email or password')
+}
+
+function invalidOrExpiredCode() {
+  return new HttpError(400, 'INVALID_OR_EXPIRED_CODE', 'Invalid or expired code')
+}
+
+// Shared by signup/resend/forgot-password: enforces the per-user+purpose
+// cooldown, invalidates any still-active previous code, and issues a fresh
+// one. `throttled: true` means the caller should skip sending an email this
+// time — callers that must stay enumeration-safe (resend/forgot-password)
+// treat this identically to "sent", never surfacing it to the client.
+async function issueOtpCode({ userId, purpose }) {
+  const existing = await emailOtpsRepository.findActiveByUserAndPurpose(userId, purpose)
+  if (existing && Date.now() - new Date(existing.created_at).getTime() < OTP_RESEND_COOLDOWN_MS) {
+    return { throttled: true }
+  }
+
+  await emailOtpsRepository.invalidateActiveForUserAndPurpose(userId, purpose)
+  const code = generateOtpCode()
+  await emailOtpsRepository.create({
+    userId,
+    purpose,
+    codeHash: hashOtpCode(code),
+    expiresAt: otpExpiresAt(),
+  })
+  return { code, throttled: false }
+}
+
+// Verifies a submitted code against the latest active OTP for a user+purpose,
+// bumping the attempt counter on a wrong guess and consuming it on success.
+// Only signup_verify uses this now — password reset moved to a link token
+// (see resetPasswordWithToken), but this stays purpose-generic in case
+// another OTP-based flow needs it later.
+async function consumeOtpCode({ userId, purpose, code }) {
+  const otpRow = await emailOtpsRepository.findActiveByUserAndPurpose(userId, purpose)
+  if (!otpRow || otpRow.attempt_count >= MAX_OTP_ATTEMPTS) throw invalidOrExpiredCode()
+
+  if (!verifyOtpCode(code, otpRow.code_hash)) {
+    await emailOtpsRepository.incrementAttempts(otpRow.id)
+    throw invalidOrExpiredCode()
+  }
+
+  await emailOtpsRepository.consume(otpRow.id)
 }
 
 export async function signup(req, res, next) {
@@ -52,11 +82,20 @@ export async function signup(req, res, next) {
       email,
       passwordHash,
       role: 'user',
-      profilePic: null,
+      profilePic: defaultAvatarUrl(firstName, lastName),
+      emailVerified: false,
     })
 
-    const authState = await usersRepository.getAuthState(user.id)
-    await issueSession(res, authState)
+    // Best-effort: the account is already created at this point, so an
+    // email-sending outage must not 502 the request and strand it (can't
+    // sign up again — the email is now taken). The user can always recover
+    // via resend-verification-code once email delivery is working again.
+    try {
+      const { code } = await issueOtpCode({ userId: user.id, purpose: 'signup_verify' })
+      await sendOtpEmail({ to: email, code })
+    } catch {
+      // swallow — see comment above
+    }
 
     return res.status(201).json({ data: user })
   } catch (error) {
@@ -72,13 +111,89 @@ export async function login(req, res, next) {
     if (!row || !row.is_active) throw invalidCredentials()
     if (role && row.role !== role) throw invalidCredentials()
 
+    // A Google-only account has no password_hash to compare against — bcrypt
+    // throws on a non-string hash rather than just returning false, so this
+    // has to be checked before calling it, not left to fall through.
+    if (!row.password_hash) {
+      throw new HttpError(
+        400,
+        'PASSWORD_LOGIN_UNAVAILABLE',
+        'This account signs in with Google. Use the Google button instead.',
+      )
+    }
+
     const passwordMatches = await comparePassword(password, row.password_hash)
     if (!passwordMatches) throw invalidCredentials()
+    if (!row.email_verified) {
+      throw new HttpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email before logging in')
+    }
 
-    await issueSession(res, { id: row.id, role: row.role, tokenVersion: row.token_version })
+    const { accessToken, refreshToken } = await issueSession({
+      id: row.id,
+      role: row.role,
+      tokenVersion: row.token_version,
+    })
     const user = await usersRepository.getUserById(row.id)
 
-    return res.json({ data: user })
+    return res.json({ data: user, accessToken, refreshToken })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+// No password, no OTP, no separate signup step: the ID token itself is proof
+// of a verified Google account, so this single endpoint covers both a first
+// Google sign-in (creates an account) and a returning one (looks up by
+// google_id). An email that already has a password account is rejected
+// rather than linked — see the comment below.
+export async function googleAuth(req, res, next) {
+  try {
+    const { credential } = req.validated.body
+    const payload = await verifyGoogleIdToken(credential)
+
+    if (!payload.email_verified) {
+      throw new HttpError(
+        403,
+        'GOOGLE_EMAIL_UNVERIFIED',
+        "Your Google account's email isn't verified",
+      )
+    }
+
+    let userId = await usersRepository.findUserIdByGoogleId(payload.sub)
+
+    if (!userId) {
+      // Deliberately not auto-linked: an account that signed up with a
+      // password owns that identity, and a matching Google email alone
+      // doesn't get to walk in and log in as them. They keep using their
+      // password; Google sign-in stays for accounts that started with it.
+      const existing = await usersRepository.findUserForLogin(payload.email)
+      if (existing) {
+        throw new HttpError(
+          409,
+          'EMAIL_REGISTERED_WITH_PASSWORD',
+          'This email is already registered with a password. Log in with your email and password instead.',
+        )
+      } else {
+        const username = await usersRepository.generateUniqueUsername(payload.email)
+        const created = await usersRepository.createGoogleUser({
+          googleId: payload.sub,
+          email: payload.email,
+          username,
+          firstName: payload.given_name || payload.name?.split(' ')[0] || 'Member',
+          lastName: payload.family_name || null,
+          profilePic: payload.picture || null,
+        })
+        userId = created.id
+      }
+    }
+
+    const authState = await usersRepository.getAuthState(userId)
+    if (!authState || !authState.isActive) throw invalidCredentials()
+
+    const { accessToken, refreshToken } = await issueSession(authState)
+    const user = await usersRepository.getUserById(userId)
+
+    return res.json({ data: user, accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
@@ -86,10 +201,7 @@ export async function login(req, res, next) {
 
 export async function refresh(req, res, next) {
   try {
-    const token = req.cookies?.refresh_token
-    if (!token) {
-      throw new HttpError(401, 'UNAUTHORIZED', 'No refresh token')
-    }
+    const { refreshToken: token } = req.validated.body
 
     const record = await refreshTokensRepository.findActiveByHash(hashToken(token))
     if (!record) {
@@ -103,9 +215,9 @@ export async function refresh(req, res, next) {
       throw new HttpError(401, 'UNAUTHORIZED', 'Invalid or expired refresh token')
     }
 
-    await issueSession(res, authState)
+    const { accessToken, refreshToken } = await issueSession(authState)
 
-    return res.json({ ok: true })
+    return res.json({ accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
@@ -113,13 +225,15 @@ export async function refresh(req, res, next) {
 
 export async function logout(req, res, next) {
   try {
-    const token = req.cookies?.refresh_token
-    if (token) {
-      await refreshTokensRepository.revokeByHash(hashToken(token))
-    }
+    const { refreshToken: token } = req.validated.body
+    const tokenRevoked = await refreshTokensRepository.revokeByHash(hashToken(token))
 
-    clearAuthCookies(res)
-    return res.json({ ok: true })
+    return res.json({
+      data: {
+        loggedOut: true,
+        tokenRevoked,
+      },
+    })
   } catch (error) {
     return next(error)
   }
@@ -140,7 +254,7 @@ export async function me(req, res, next) {
 
 export async function updateProfile(req, res, next) {
   try {
-    const { firstName, lastName, username, email, profilePic } = req.validated.body
+    const { firstName, lastName, username, email, profilePic, bio } = req.validated.body
 
     await usersRepository.checkUniqueFields({ email, username, excludeId: req.user.id })
     const user = await usersRepository.updateUser(req.user.id, {
@@ -148,7 +262,8 @@ export async function updateProfile(req, res, next) {
       lastName,
       username,
       email,
-      profilePic,
+      profilePic: profilePic || defaultAvatarUrl(firstName, lastName),
+      bio,
     })
     if (!user) {
       throw new HttpError(404, 'USER_NOT_FOUND', 'User was not found')
@@ -178,9 +293,126 @@ export async function resetPassword(req, res, next) {
     await refreshTokensRepository.revokeAllForUser(req.user.id)
 
     const authState = await usersRepository.getAuthState(req.user.id)
-    await issueSession(res, authState)
+    const { accessToken, refreshToken } = await issueSession(authState)
 
-    return res.json({ data: user })
+    return res.json({ data: user, accessToken, refreshToken })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export async function verifyEmail(req, res, next) {
+  try {
+    const { email, code } = req.validated.body
+    const row = await usersRepository.findUserForLogin(email)
+    if (!row || !row.is_active) throw invalidOrExpiredCode()
+    if (row.email_verified) {
+      throw new HttpError(409, 'ALREADY_VERIFIED', 'This account is already verified')
+    }
+
+    await consumeOtpCode({ userId: row.id, purpose: 'signup_verify', code })
+    await usersRepository.markEmailVerified(row.id)
+
+    const authState = await usersRepository.getAuthState(row.id)
+    const { accessToken, refreshToken } = await issueSession(authState)
+    const user = await usersRepository.getUserById(row.id)
+
+    return res.json({ data: user, accessToken, refreshToken })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+// Enumeration-safe: always 200, identical body, regardless of whether the
+// account exists, is already verified, is inactive, or is inside the resend
+// cooldown — a differing response would itself confirm the address is a
+// real, unverified account.
+export async function resendVerificationCode(req, res, next) {
+  try {
+    const { email } = req.validated.body
+    const row = await usersRepository.findUserForLogin(email)
+
+    if (row && row.is_active && !row.email_verified) {
+      try {
+        const { code, throttled } = await issueOtpCode({ userId: row.id, purpose: 'signup_verify' })
+        if (!throttled) await sendOtpEmail({ to: email, code })
+      } catch {
+        // swallow — response must stay identical either way
+      }
+    }
+
+    return res.json({ data: { sent: true } })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+// Enumeration-safe: same reasoning as resendVerificationCode above. Issues a
+// single-use, time-limited link token (see passwordResetToken.js) rather
+// than a 6-digit code — OWASP's recommended shape for "reset by email",
+// since it doesn't require the user to hand-copy anything and can't be
+// brute-forced the way a short code theoretically could.
+export async function forgotPassword(req, res, next) {
+  try {
+    const { email } = req.validated.body
+    const row = await usersRepository.findUserForLogin(email)
+
+    if (row && row.is_active) {
+      try {
+        // Invalidate first: an older, still-unused link from a previous
+        // request shouldn't keep working once a newer one has been sent.
+        await passwordResetTokensRepository.invalidateActiveForUser(row.id)
+        const { token, hash, expiresAt } = generatePasswordResetToken()
+        await passwordResetTokensRepository.create({ userId: row.id, tokenHash: hash, expiresAt })
+        await sendPasswordResetEmail({ to: email, token })
+      } catch {
+        // swallow — response must stay identical either way
+      }
+    }
+
+    return res.json({ data: { requested: true } })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+function invalidOrExpiredToken() {
+  return new HttpError(
+    400,
+    'INVALID_OR_EXPIRED_TOKEN',
+    'This reset link is invalid or has expired. Request a new one.',
+  )
+}
+
+// The GET-then-POST split matters here: clicking the email link only ever
+// renders a form (client-side routing, no server round-trip) — the token is
+// read from the URL and submitted here, on deliberate user action, along
+// with the new password. Nothing about receiving or opening the email can
+// consume the single use on its own, which is what protects against email
+// scanners/prefetchers silently burning the link before the real recipient
+// clicks it.
+export async function resetPasswordWithToken(req, res, next) {
+  try {
+    const { token, newPassword } = req.validated.body
+    const hash = hashResetToken(token)
+    const tokenRow = await passwordResetTokensRepository.findActiveByHash(hash)
+    if (!tokenRow) throw invalidOrExpiredToken()
+
+    await passwordResetTokensRepository.markUsed(tokenRow.id)
+
+    const passwordHash = await hashPassword(newPassword)
+    const user = await usersRepository.updateUserPassword(tokenRow.user_id, passwordHash)
+    await refreshTokensRepository.revokeAllForUser(tokenRow.user_id)
+    // Proving mailbox control via this link is equally valid proof of
+    // ownership as the signup code — mark verified too, so an unverified
+    // account someone else typo'd into existence can be reclaimed and
+    // logged into in one step instead of dead-ending at EMAIL_NOT_VERIFIED.
+    if (!user.emailVerified) await usersRepository.markEmailVerified(tokenRow.user_id)
+
+    const authState = await usersRepository.getAuthState(tokenRow.user_id)
+    const { accessToken, refreshToken } = await issueSession(authState)
+
+    return res.json({ data: user, accessToken, refreshToken })
   } catch (error) {
     return next(error)
   }
